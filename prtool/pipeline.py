@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from prtool.classifier import ClassificationConfig, classify
+from prtool.classifier import CLASSIFIER_VERSION, ClassificationConfig, classify
 from prtool.config import PartialSettings, Settings
 from prtool.db import Database
 from prtool.feature_extractor import FeatureExtractor
@@ -211,7 +211,14 @@ def _ingest_mrs(
     return len(to_process)
 
 
-def classify_project(db: Database, partial_settings: PartialSettings, project_id: int) -> int:
+def classify_project(
+    db: Database,
+    partial_settings: PartialSettings,
+    project_id: int,
+    *,
+    only_stale: bool = False,
+    target_classifier_version: str | None = None,
+) -> int:
     extractor = FeatureExtractor(partial_settings)
     c_cfg = ClassificationConfig(
         infra_strong_threshold=partial_settings.infra_strong_threshold,
@@ -219,13 +226,27 @@ def classify_project(db: Database, partial_settings: PartialSettings, project_id
     )
 
     with db.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM merge_requests WHERE project_id = ?
-            ORDER BY updated_at ASC
-            """,
-            (project_id,),
-        ).fetchall()
+        if only_stale:
+            expected_version = target_classifier_version or CLASSIFIER_VERSION
+            rows = conn.execute(
+                """
+                SELECT m.*
+                FROM merge_requests m
+                LEFT JOIN mr_classifications c ON c.mr_id = m.id
+                WHERE m.project_id = ?
+                  AND (c.mr_id IS NULL OR c.classifier_version IS NULL OR c.classifier_version != ?)
+                ORDER BY m.updated_at ASC
+                """,
+                (project_id, expected_version),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM merge_requests WHERE project_id = ?
+                ORDER BY updated_at ASC
+                """,
+                (project_id,),
+            ).fetchall()
 
         total = len(rows)
         for idx, row in enumerate(rows, start=1):

@@ -6,19 +6,21 @@ from prtool import cli
 
 
 def test_export_cli_project_scope(monkeypatch, capsys, tmp_path) -> None:
-    calls: dict[str, list[int] | None] = {"csv": None, "jsonl": None}
+    calls: dict[str, object] = {}
 
     monkeypatch.setattr(cli, "_resolve_project_scope_ids", lambda args: [101, 202])
 
-    def _fake_csv(db, out_dir="./exports", project_ids=None):
-        calls["csv"] = project_ids
-        p = Path(tmp_path / "mr_classification.csv")
+    def _fake_csv(db, out_dir="./exports", project_ids=None, filename_stem="mr_classification"):
+        calls["csv_project_ids"] = project_ids
+        calls["csv_stem"] = filename_stem
+        p = Path(tmp_path / f"{filename_stem}.csv")
         p.write_text("ok", encoding="utf-8")
         return p
 
-    def _fake_jsonl(db, out_dir="./exports", project_ids=None):
-        calls["jsonl"] = project_ids
-        p = Path(tmp_path / "mr_classification.jsonl")
+    def _fake_jsonl(db, out_dir="./exports", project_ids=None, filename_stem="mr_classification"):
+        calls["jsonl_project_ids"] = project_ids
+        calls["jsonl_stem"] = filename_stem
+        p = Path(tmp_path / f"{filename_stem}.jsonl")
         p.write_text("ok", encoding="utf-8")
         return p
 
@@ -30,5 +32,29 @@ def test_export_cli_project_scope(monkeypatch, capsys, tmp_path) -> None:
 
     assert rc == 0
     assert "Exported:" in out
-    assert calls["csv"] == [101, 202]
-    assert calls["jsonl"] == [101, 202]
+    assert calls["csv_project_ids"] == [101, 202]
+    assert calls["jsonl_project_ids"] == [101, 202]
+    assert calls["csv_stem"] == "mr_classification_project_101"
+    assert calls["jsonl_stem"] == "mr_classification_project_101"
+
+
+def test_export_cli_group_scope_uses_group_tag(monkeypatch, capsys, tmp_path) -> None:
+    monkeypatch.setattr(cli, "_resolve_project_scope_ids", lambda args: [30570685])
+
+    calls: dict[str, str] = {}
+
+    def _fake_csv(db, out_dir="./exports", project_ids=None, filename_stem="mr_classification"):
+        calls["stem"] = filename_stem
+        p = Path(tmp_path / f"{filename_stem}.csv")
+        p.write_text("ok", encoding="utf-8")
+        return p
+
+    monkeypatch.setattr(cli, "export_csv", _fake_csv)
+    monkeypatch.setattr(cli, "export_jsonl", lambda *a, **k: Path(tmp_path / "x.jsonl"))
+
+    rc = cli.main(["export", "--format", "csv", "--group-id", "Cimpress-Technology/boxup"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "mr_classification_Cimpress-Technology_boxup.csv" in out
+    assert calls["stem"] == "mr_classification_Cimpress-Technology_boxup"

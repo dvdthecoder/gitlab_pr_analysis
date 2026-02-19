@@ -25,6 +25,10 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
     assert "is_infra_related" in class_cols
     assert "infra_override_applied" in class_cols
     assert "classification_rationale_json" in class_cols
+    assert "capability_tags_json" in class_cols
+    assert "risk_tags_json" in class_cols
+    assert "classification_confidence" in class_cols
+    assert "classifier_version" in class_cols
     assert "data_source" in mr_cols
     assert "markdown_path" in qodo_cols
     assert "qodo_type" in qodo_cols

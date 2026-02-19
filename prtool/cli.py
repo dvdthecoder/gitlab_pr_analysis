@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import sys
 from typing import Any
@@ -15,6 +16,7 @@ from prtool.config import (
     resolve_group_ids,
     resolve_project_ids,
 )
+from prtool.classifier import CLASSIFIER_VERSION
 from prtool.db import Database
 from prtool.enrich import (
     QODO_TOOLS,
@@ -66,6 +68,15 @@ def build_parser() -> argparse.ArgumentParser:
     classify_cmd.add_argument("--all-projects", action="store_true")
     classify_cmd.add_argument("--project-start-index", type=int, default=1)
     classify_cmd.add_argument("--project-count", type=int)
+
+    reclassify_cmd = sub.add_parser("reclassify")
+    reclassify_cmd.add_argument("--project-id", type=int, action="append")
+    reclassify_cmd.add_argument("--group-id", action="append")
+    reclassify_cmd.add_argument("--all-projects", action="store_true")
+    reclassify_cmd.add_argument("--project-start-index", type=int, default=1)
+    reclassify_cmd.add_argument("--project-count", type=int)
+    reclassify_cmd.add_argument("--only-stale", action=argparse.BooleanOptionalAction, default=True)
+    reclassify_cmd.add_argument("--force", action="store_true")
 
     export_cmd = sub.add_parser("export")
     export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
@@ -337,6 +348,24 @@ def _resolve_classify_project_ids(args: argparse.Namespace, db: Database) -> lis
     )
 
 
+
+def _safe_filename_tag(raw: str) -> str:
+    tag = re.sub(r"[^A-Za-z0-9._-]+", "_", (raw or "").strip())
+    return tag.strip("_") or "scope"
+
+
+def _resolve_export_stem(args: argparse.Namespace) -> str:
+    groups = resolve_group_ids(getattr(args, "group_id", None))
+    if groups:
+        if len(groups) == 1:
+            return f"mr_classification_{_safe_filename_tag(groups[0])}"
+        joined = "_".join(_safe_filename_tag(g) for g in groups[:2])
+        return f"mr_classification_{joined}_and_{len(groups)}_groups"
+
+    explicit_projects = getattr(args, "project_id", None) or []
+    if explicit_projects and len(explicit_projects) == 1:
+        return f"mr_classification_project_{int(explicit_projects[0])}"
+    return "mr_classification"
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     parser = build_parser()
@@ -405,16 +434,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Classification total across projects: {total}")
         return 0
 
+    if args.command == "reclassify":
+        db.init_schema()
+        project_ids = _resolve_classify_project_ids(args, db)
+        only_stale = False if args.force else bool(args.only_stale)
+        mode = f"only-stale (version={CLASSIFIER_VERSION})" if only_stale else "force-all"
+        print(f"Selected projects ({len(project_ids)}): {project_ids} | mode={mode}")
+        total = 0
+        for project_id in project_ids:
+            count = classify_project(
+                db,
+                partial,
+                project_id,
+                only_stale=only_stale,
+                target_classifier_version=CLASSIFIER_VERSION,
+            )
+            total += count
+            print(f"[project {project_id}] Reclassification complete: {count} merge requests processed")
+        print(f"Reclassification total across projects: {total}")
+        return 0
+
     if args.command == "export":
         db.init_schema()
         project_ids: list[int] | None = None
         if getattr(args, "project_id", None) or getattr(args, "group_id", None) or getattr(args, "all_projects", False):
             project_ids = _resolve_project_scope_ids(args)
+        filename_stem = _resolve_export_stem(args)
         outputs: list[str] = []
         if args.format in ("csv", "both"):
-            outputs.append(str(export_csv(db, out_dir=args.out_dir, project_ids=project_ids)))
+            outputs.append(str(export_csv(db, out_dir=args.out_dir, project_ids=project_ids, filename_stem=filename_stem)))
         if args.format in ("jsonl", "both"):
-            outputs.append(str(export_jsonl(db, out_dir=args.out_dir, project_ids=project_ids)))
+            outputs.append(str(export_jsonl(db, out_dir=args.out_dir, project_ids=project_ids, filename_stem=filename_stem)))
         print("Exported:\n" + "\n".join(outputs))
         return 0
 

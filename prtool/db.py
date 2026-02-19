@@ -102,6 +102,10 @@ CREATE TABLE IF NOT EXISTS mr_classifications (
   infra_override_applied INTEGER NOT NULL,
   complexity_level TEXT NOT NULL,
   complexity_score REAL NOT NULL,
+  capability_tags_json TEXT NOT NULL DEFAULT '[]',
+  risk_tags_json TEXT NOT NULL DEFAULT '[]',
+  classification_confidence REAL NOT NULL DEFAULT 0.5,
+  classifier_version TEXT NOT NULL DEFAULT 'v1.0',
   classification_rationale_json TEXT NOT NULL,
   classified_at TEXT NOT NULL,
   FOREIGN KEY(mr_id) REFERENCES merge_requests(id) ON DELETE CASCADE
@@ -237,6 +241,16 @@ class Database:
                 WHERE web_url LIKE 'https://example.local/%'
                 """
             )
+
+        class_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mr_classifications)").fetchall()}
+        if "capability_tags_json" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN capability_tags_json TEXT NOT NULL DEFAULT '[]'")
+        if "risk_tags_json" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN risk_tags_json TEXT NOT NULL DEFAULT '[]'")
+        if "classification_confidence" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN classification_confidence REAL NOT NULL DEFAULT 0.5")
+        if "classifier_version" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN classifier_version TEXT NOT NULL DEFAULT 'v1.0'")
 
         qodo_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_qodo_describe)").fetchall()}
         if "raw_output_path" not in qodo_columns:
@@ -444,8 +458,9 @@ class Database:
             """
             INSERT INTO mr_classifications (
               mr_id, base_type, final_type, is_infra_related, infra_override_applied,
-              complexity_level, complexity_score, classification_rationale_json, classified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              complexity_level, complexity_score, capability_tags_json, risk_tags_json,
+              classification_confidence, classifier_version, classification_rationale_json, classified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(mr_id) DO UPDATE SET
               base_type=excluded.base_type,
               final_type=excluded.final_type,
@@ -453,6 +468,10 @@ class Database:
               infra_override_applied=excluded.infra_override_applied,
               complexity_level=excluded.complexity_level,
               complexity_score=excluded.complexity_score,
+              capability_tags_json=excluded.capability_tags_json,
+              risk_tags_json=excluded.risk_tags_json,
+              classification_confidence=excluded.classification_confidence,
+              classifier_version=excluded.classifier_version,
               classification_rationale_json=excluded.classification_rationale_json,
               classified_at=excluded.classified_at
             """,
@@ -464,6 +483,10 @@ class Database:
                 1 if c["infra_override_applied"] else 0,
                 c["complexity_level"],
                 float(c["complexity_score"]),
+                json.dumps(c.get("capability_tags", [])),
+                json.dumps(c.get("risk_tags", [])),
+                float(c.get("classification_confidence", 0.5)),
+                str(c.get("classifier_version", "v1.0")),
                 json.dumps(c["rationale"]),
                 c["classified_at"],
             ),

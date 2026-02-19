@@ -70,6 +70,9 @@ prtool classify --project-id 123 --project-id 456
 prtool classify --group-id your-org/your-group
 prtool classify --all-projects
 prtool classify --all-projects --project-start-index 2 --project-count 5
+prtool reclassify --all-projects
+prtool reclassify --all-projects --only-stale
+prtool reclassify --all-projects --force
 prtool batch run --all-projects
 prtool batch run --group-id your-org/your-group
 prtool batch run --group-id your-org/your-group --concurrency 5 --light-mode

@@ -246,6 +246,9 @@ def get_recent_rows(
               c.final_type,
               c.complexity_level,
               c.complexity_score,
+              c.capability_tags_json,
+              c.risk_tags_json,
+              c.classification_confidence,
               f.files_changed,
               f.churn,
               f.commit_count,
@@ -477,6 +480,9 @@ def _html_page(
             f"<td>{html.escape(str(r['final_type']))}</td>"
             f"<td>{html.escape(str(r['complexity_level']))}</td>"
             f"<td>{float(r['complexity_score'] or 0.0):.2f}</td>"
+            f"<td>{html.escape(str(r['capability_tags_json'] or '[]'))}</td>"
+            f"<td>{html.escape(str(r['risk_tags_json'] or '[]'))}</td>"
+            f"<td>{float(r['classification_confidence'] or 0.0):.2f}</td>"
             f"<td>{int(r['files_changed'] or 0)}</td>"
             f"<td>{int(r['churn'] or 0)}</td>"
             f"<td>{int(r['commit_count'] or 0)}</td>"
@@ -487,7 +493,7 @@ def _html_page(
             "</tr>"
         )
 
-    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='14'>No rows found</td></tr>"
+    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='17'>No rows found</td></tr>"
     heatmap_html = _render_heatmap(heat_rows, heat_matrix, heat_max)
 
     compaction_rows = []
@@ -586,7 +592,7 @@ small {{ color: #6b7280; }}
   <thead>
     <tr>
       <th>Project</th><th>MR IID</th><th>Title</th><th>Base</th><th>Final</th>
-      <th>Complexity</th><th>Score</th><th>Files</th><th>Churn</th><th>Commits</th>
+      <th>Complexity</th><th>Score</th><th>Tags</th><th>Risks</th><th>Conf</th><th>Files</th><th>Churn</th><th>Commits</th>
       <th>Comments</th><th>Unresolved</th><th>CI Failed</th><th>Updated</th>
     </tr>
   </thead>
