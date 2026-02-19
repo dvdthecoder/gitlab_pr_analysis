@@ -1,0 +1,9 @@
+# Enrichment/Qodo runtime compatibility set.
+# Install into your venv with:
+#   pip install -r requirements-enrich.txt
+#
+# Keep these aligned with pr-agent 0.2.4 pins.
+pr-agent==0.2.4
+litellm==1.43.13
+openai==1.40.6
+httpx==0.27.2

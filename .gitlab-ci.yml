@@ -1,0 +1,36 @@
+stages:
+  - test
+  - refresh
+
+default:
+  image: python:3.11-slim
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -e . pytest
+
+test:
+  stage: test
+  script:
+    - pytest
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+refresh_and_classify:
+  stage: refresh
+  script:
+    - prtool init-db
+    - prtool sync refresh
+    - prtool classify
+    - prtool export --format both
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - pr_analysis.db
+      - exports/
+      - reports/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'

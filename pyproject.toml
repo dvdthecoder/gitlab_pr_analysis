@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prtool"
+version = "0.1.0"
+description = "GitLab PR/MR analysis with SQLite and infra-aware classification"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["python-gitlab>=4.5.0"]
+
+[project.scripts]
+prtool = "prtool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["prtool*"]
+exclude = ["tests*", "exports*", "reports*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"

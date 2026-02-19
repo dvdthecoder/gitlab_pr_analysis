@@ -1,0 +1,60 @@
+name: CI and Scheduled Refresh
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . pytest
+      - name: Run tests
+        run: pytest
+
+  refresh:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      GITLAB_BASE_URL: ${{ secrets.GITLAB_BASE_URL }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_PROJECT_IDS: ${{ secrets.GITLAB_PROJECT_IDS }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      DB_PATH: ./pr_analysis.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Init DB
+        run: prtool init-db
+      - name: Refresh data
+        run: prtool sync refresh
+      - name: Classify
+        run: prtool classify
+      - name: Export
+        run: prtool export --format both
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-analysis-exports
+          path: |
+            ./pr_analysis.db
+            ./exports/*.csv
+            ./exports/*.jsonl
+            ./reports/*.csv
