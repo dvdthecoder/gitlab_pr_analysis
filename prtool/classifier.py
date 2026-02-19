@@ -23,7 +23,7 @@ class ClassificationConfig:
     infra_weak_threshold: float
 
 
-CLASSIFIER_VERSION = "v2.1"
+CLASSIFIER_VERSION = "v2.2"
 
 
 def infer_base_type(mr: dict[str, Any], files: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -62,8 +62,21 @@ def _has_any(text: str, needles: list[str]) -> bool:
     return any(n in text for n in needles)
 
 
+def _infraish_terms() -> list[str]:
+    return [
+        "deploy",
+        "deployment",
+        "redeploy",
+        "release",
+        "rollout",
+        "lambda",
+        "serverless",
+    ]
+
+
 def detect_infra_intent_override(mr: dict[str, Any], files: list[dict[str, Any]]) -> tuple[bool, list[str]]:
     text, paths = _joined_text_and_paths(mr, files)
+    title = (mr.get("title") or "").lower()
     evidence: list[str] = []
 
     strong_terms = [
@@ -79,19 +92,29 @@ def detect_infra_intent_override(mr: dict[str, Any], files: list[dict[str, Any]]
         "helm",
         "dockerfile",
         "infrastructure as code",
+        "serverless",
+        "lambda",
     ]
     for term in strong_terms:
         if term in text:
             evidence.append(f"term:{term}")
 
+    for term in _infraish_terms():
+        if term in title:
+            evidence.append(f"title:{term}")
+
     for p in paths:
-        if p in {".gitlab-ci.yml", ".gitlab-ci.yaml", "dockerfile"}:
+        if p in {".gitlab-ci.yml", ".gitlab-ci.yaml", "dockerfile", "serverless.yml"}:
             evidence.append(f"path:{p}")
         if p.startswith(".github/workflows/"):
             evidence.append(f"path:{p}")
         if p.startswith("infra/") or p.startswith("infrastructure/"):
             evidence.append(f"path:{p}")
         if p.startswith("terraform/") or p.startswith("helm/") or p.startswith("k8s/"):
+            evidence.append(f"path:{p}")
+        if p.startswith("lambda/") or p.startswith("lambdas/"):
+            evidence.append(f"path:{p}")
+        if p.startswith("scripts/deploy") or p.endswith("/deploy.sh") or p == "deploy.sh":
             evidence.append(f"path:{p}")
         if p.endswith(".tf") or p.endswith(".tfvars"):
             evidence.append(f"path:{p}")
@@ -124,7 +147,7 @@ def detect_capability_tags(
     k8s_hits = [k for k in ["k8s", "kubernetes", "helm", "cluster"] if k in text]
     add_tag("infra.k8s", k8s_hits)
 
-    cicd_hits = [k for k in ["ci/cd", "pipeline", "gitlab-ci", "github actions", "jenkins", "codedeploy"] if k in text]
+    cicd_hits = [k for k in ["ci/cd", "pipeline", "gitlab-ci", "github actions", "jenkins", "codedeploy", "deploy", "deployment", "release", "rollout", "lambda", "serverless"] if k in text]
     add_tag("infra.cicd", cicd_hits)
 
     obs_hits = [k for k in ["observability", "prometheus", "grafana", "datadog", "tracing", "metrics", "newrelic"] if k in text]
@@ -184,6 +207,7 @@ def compute_confidence(
     mr: dict[str, Any],
     files: list[dict[str, Any]],
     capability_tags: list[str],
+    infra_intent_override: bool = False,
 ) -> float:
     text, paths = _joined_text_and_paths(mr, files)
     score = 0.55
@@ -195,6 +219,14 @@ def compute_confidence(
         score += min(0.2, 0.03 * len(capability_tags))
     if base_type == "feature" and not capability_tags and len(paths) <= 1 and len(text) < 80:
         score -= 0.1
+
+    if base_type == "feature" and any(t in text for t in _infraish_terms()) and not any(
+        t.startswith("infra.") for t in capability_tags
+    ):
+        score -= 0.08
+    if infra_intent_override:
+        score += 0.08
+
     return max(0.3, min(0.95, round(score, 3)))
 
 
@@ -239,7 +271,7 @@ def classify(
 
     capability_tags, capability_evidence = detect_capability_tags(mr, files, features, final_type)
     risk_tags = detect_risk_tags(mr, files, features, capability_tags, final_type)
-    confidence = compute_confidence(base_type, mr, files, capability_tags)
+    confidence = compute_confidence(base_type, mr, files, capability_tags, infra_intent_override=infra_intent_override)
 
     c_score, c_level = complexity_score(features)
 

@@ -149,7 +149,7 @@ def test_snyk_signal_maps_to_security_tag() -> None:
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
     assert "security.sca" in result["capability_tags"]
     assert "risk.security" in result["risk_tags"]
-    assert result["classifier_version"] == "v2.1"
+    assert result["classifier_version"] == "v2.2"
 
 
 def test_deploy_pipeline_title_overrides_to_infra_even_without_strong_infra_score() -> None:
@@ -210,4 +210,45 @@ def test_classifier_version_bumped_after_rule_update() -> None:
         pipelines={"failed_count": 0},
     )
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
-    assert result["classifier_version"] == "v2.1"
+    assert result["classifier_version"] == "v2.2"
+
+
+
+def test_deploy_script_path_overrides_to_infra() -> None:
+    extractor = FeatureExtractor(_settings())
+    mr = {
+        "title": "Update helper script",
+        "description": "script cleanup",
+        "labels": ["chore"],
+    }
+    files = [{"new_path": "scripts/deploy.sh", "additions": 6, "deletions": 1}]
+    features = extractor.extract(
+        mr,
+        commits=[],
+        files=files,
+        discussions={"thread_count": 0, "note_count": 0, "unresolved_count": 0},
+        pipelines={"failed_count": 0},
+    )
+    result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
+    assert result["final_type"] == "infra"
+    assert result["infra_override_applied"] is True
+
+
+def test_lambda_title_overrides_to_infra() -> None:
+    extractor = FeatureExtractor(_settings())
+    mr = {
+        "title": "Deploying Invoice Reminder Lambda",
+        "description": "release prep",
+        "labels": ["feature"],
+    }
+    files = [{"new_path": "src/reminders/index.ts", "additions": 20, "deletions": 2}]
+    features = extractor.extract(
+        mr,
+        commits=[],
+        files=files,
+        discussions={"thread_count": 0, "note_count": 0, "unresolved_count": 0},
+        pipelines={"failed_count": 0},
+    )
+    result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
+    assert result["final_type"] == "infra"
+    assert result["infra_override_applied"] is True
