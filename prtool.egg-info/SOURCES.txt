@@ -27,6 +27,8 @@ tests/test_db_project_ids.py
 tests/test_demo_seed.py
 tests/test_dotenv.py
 tests/test_enrich.py
+tests/test_export_cli_scope.py
+tests/test_export_scope.py
 tests/test_group_resolution.py
 tests/test_infra_classifier.py
 tests/test_project_resolution.py

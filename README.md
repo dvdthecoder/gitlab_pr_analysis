@@ -86,6 +86,9 @@ prtool enrich status --group-id your-org/your-group --format json
 prtool cleanup --data-source test
 prtool cleanup --data-source test --project-id 12345
 prtool export --format csv
+prtool export --format both --project-id 123
+prtool export --format csv --group-id your-org/your-group
+prtool export --format jsonl --all-projects --project-start-index 1 --project-count 10
 prtool audit sample --size 50
 prtool demo seed --project-id 999
 ```
@@ -98,6 +101,7 @@ If `--group-id` (or `GITLAB_GROUP_ID(S)`) is provided, project discovery is scop
 `projects count` is the canonical command to get total project count for batching.
 `projects list` now ranks by `mr_count_all_states` high-to-low by default.
 `view` starts a read-only local web screen backed by SQLite.
+`view` supports `group_id` filtering in the UI (resolved via GitLab API to project IDs).
 `enrich qodo` supports a stratified candidate selector (`--candidate-mode stratified`) to pick top-complexity MRs with soft type diversification before running tools.
 `--concurrency` controls MR detail fetch workers (default 5).
 `--light-mode` fetches metadata/commits/files only (skips discussions/approvals/pipelines for faster sync).

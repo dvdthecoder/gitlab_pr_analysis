@@ -69,6 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_cmd = sub.add_parser("export")
     export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
+    export_cmd.add_argument("--project-id", type=int, action="append")
+    export_cmd.add_argument("--group-id", action="append")
+    export_cmd.add_argument("--all-projects", action="store_true")
+    export_cmd.add_argument("--project-start-index", type=int, default=1)
+    export_cmd.add_argument("--project-count", type=int)
+    export_cmd.add_argument("--out-dir", default="./exports")
 
     audit_cmd = sub.add_parser("audit")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command", required=True)
@@ -401,11 +407,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export":
         db.init_schema()
+        project_ids: list[int] | None = None
+        if getattr(args, "project_id", None) or getattr(args, "group_id", None) or getattr(args, "all_projects", False):
+            project_ids = _resolve_project_scope_ids(args)
         outputs: list[str] = []
         if args.format in ("csv", "both"):
-            outputs.append(str(export_csv(db)))
+            outputs.append(str(export_csv(db, out_dir=args.out_dir, project_ids=project_ids)))
         if args.format in ("jsonl", "both"):
-            outputs.append(str(export_jsonl(db)))
+            outputs.append(str(export_jsonl(db, out_dir=args.out_dir, project_ids=project_ids)))
         print("Exported:\n" + "\n".join(outputs))
         return 0
 

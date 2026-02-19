@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlparse
 
+from prtool.config import load_settings, resolve_group_ids
+from prtool.gitlab_client import GitLabSourceClient
+
 COMPLEXITY_COLUMNS = ["Very Low", "Low", "Medium", "High", "Very High"]
 DATA_SOURCES = ["production", "test", "all"]
 
@@ -25,6 +28,7 @@ def _open_conn(db_path: str) -> sqlite3.Connection:
 
 def _filter_sql(
     project_id: int | None,
+    project_ids: list[int] | None,
     final_type: str | None,
     complexity_level: str | None,
     data_source: str,
@@ -35,6 +39,10 @@ def _filter_sql(
     if project_id is not None:
         clauses.append("m.project_id = ?")
         params.append(project_id)
+    if project_ids:
+        placeholders = ",".join(["?"] * len(project_ids))
+        clauses.append(f"m.project_id IN ({placeholders})")
+        params.extend(project_ids)
     if final_type:
         clauses.append("c.final_type = ?")
         params.append(final_type)
@@ -51,12 +59,38 @@ def _filter_sql(
     return where, tuple(params)
 
 
-def get_project_ids(db_path: str, data_source: str = "production") -> list[int]:
+def _resolve_group_projects(group_id: str | None) -> list[int] | None:
+    if not group_id:
+        return None
+    try:
+        group_ids = resolve_group_ids([group_id])
+        if not group_ids:
+            return None
+        settings = load_settings()
+        client = GitLabSourceClient(settings)
+        projects: dict[int, bool] = {}
+        for gid in group_ids:
+            for project in client.list_group_projects(gid):
+                projects[int(project["id"])] = True
+        return sorted(projects.keys())
+    except Exception:
+        # Keep viewer usable even without API credentials/reachability.
+        return []
+
+
+def get_project_ids(db_path: str, data_source: str = "production", project_ids: list[int] | None = None) -> list[int]:
     where = ""
-    params: tuple[Any, ...] = ()
+    params: list[Any] = []
+    clauses: list[str] = []
     if data_source != "all":
-        where = "WHERE data_source = ?"
-        params = (data_source,)
+        clauses.append("data_source = ?")
+        params.append(data_source)
+    if project_ids:
+        placeholders = ",".join(["?"] * len(project_ids))
+        clauses.append(f"project_id IN ({placeholders})")
+        params.extend(project_ids)
+    if clauses:
+        where = "WHERE " + " AND ".join(clauses)
 
     with _open_conn(db_path) as conn:
         rows = conn.execute(
@@ -66,7 +100,7 @@ def get_project_ids(db_path: str, data_source: str = "production") -> list[int]:
             {where}
             ORDER BY project_id ASC
             """,
-            params,
+            tuple(params),
         ).fetchall()
     return [int(r["project_id"]) for r in rows]
 
@@ -74,11 +108,13 @@ def get_project_ids(db_path: str, data_source: str = "production") -> list[int]:
 def get_type_counts(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     complexity_level: str | None = None,
     data_source: str = "production",
 ) -> list[tuple[str, int]]:
     where, params = _filter_sql(
         project_id=project_id,
+        project_ids=project_ids,
         final_type=None,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -101,12 +137,14 @@ def get_type_counts(
 def get_overview(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
     data_source: str = "production",
 ) -> dict[str, Any]:
     where, params = _filter_sql(
         project_id=project_id,
+        project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -141,11 +179,13 @@ def get_overview(
 def get_heatmap(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     final_type: str | None = None,
     data_source: str = "production",
 ) -> tuple[list[str], dict[str, dict[str, int]], int]:
     where, params = _filter_sql(
         project_id=project_id,
+        project_ids=project_ids,
         final_type=final_type,
         complexity_level=None,
         data_source=data_source,
@@ -178,6 +218,7 @@ def get_heatmap(
 def get_recent_rows(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
     data_source: str = "production",
@@ -186,6 +227,7 @@ def get_recent_rows(
 ) -> list[dict[str, Any]]:
     where, params = _filter_sql(
         project_id=project_id,
+        project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -228,6 +270,7 @@ def get_recent_rows(
 def get_enrichment_rows(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
     data_source: str = "production",
@@ -235,6 +278,7 @@ def get_enrichment_rows(
 ) -> list[dict[str, Any]]:
     where, params = _filter_sql(
         project_id=project_id,
+        project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -265,6 +309,7 @@ def get_enrichment_rows(
 def get_project_compactions(
     db_path: str,
     project_id: int | None = None,
+    project_ids: list[int] | None = None,
     data_source: str = "production",
     limit: int = 50,
 ) -> list[dict[str, Any]]:
@@ -273,6 +318,10 @@ def get_project_compactions(
     if project_id is not None:
         clauses.append("m.project_id = ?")
         params.append(project_id)
+    if project_ids:
+        placeholders = ",".join(["?"] * len(project_ids))
+        clauses.append(f"m.project_id IN ({placeholders})")
+        params.extend(project_ids)
     if data_source != "all":
         clauses.append("m.data_source = ?")
         params.append(data_source)
@@ -328,16 +377,19 @@ def _render_heatmap(rows: list[str], matrix: dict[str, dict[str, int]], max_coun
 def _html_page(
     db_path: str,
     project_id: int | None,
+    group_id: str | None,
     final_type: str | None,
     complexity_level: str | None,
     data_source: str,
     limit: int,
     sort_by: str,
 ) -> str:
-    projects = get_project_ids(db_path, data_source=data_source)
+    group_project_ids = _resolve_group_projects(group_id) if group_id else None
+    projects = get_project_ids(db_path, data_source=data_source, project_ids=group_project_ids)
     overview = get_overview(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -345,12 +397,14 @@ def _html_page(
     type_counts = get_type_counts(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         complexity_level=complexity_level,
         data_source=data_source,
     )
     rows = get_recent_rows(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -360,12 +414,14 @@ def _html_page(
     heat_rows, heat_matrix, heat_max = get_heatmap(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         final_type=final_type,
         data_source=data_source,
     )
     enrich_rows = get_enrichment_rows(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
         data_source=data_source,
@@ -374,6 +430,7 @@ def _html_page(
     compactions = get_project_compactions(
         db_path,
         project_id=project_id,
+        project_ids=group_project_ids,
         data_source=data_source,
         limit=100,
     )
@@ -508,6 +565,7 @@ small {{ color: #6b7280; }}
 </div>
 
 <form method="GET" action="/">
+  <div><label>Group</label><br /><input type="text" name="group_id" value="{html.escape(group_id or '')}" placeholder="org/subgroup or 12345" /></div>
   <div><label>Project</label><br /><select name="project_id">{''.join(project_options)}</select></div>
   <div><label>Final type</label><br /><select name="final_type">{''.join(type_options)}</select></div>
   <div><label>Complexity</label><br /><select name="complexity_level">{''.join(complexity_options)}</select></div>
@@ -609,6 +667,7 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
 
             params = parse_qs(parsed.query)
             project_id_raw = params.get("project_id", [""])[0].strip()
+            group_id_raw = params.get("group_id", [""])[0].strip()
             final_type_raw = params.get("final_type", [""])[0].strip()
             complexity_level_raw = params.get("complexity_level", [""])[0].strip()
             data_source_raw = params.get("data_source", ["production"])[0].strip()
@@ -630,6 +689,7 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
             body = _html_page(
                 db_path=db_path,
                 project_id=project_id,
+                group_id=group_id_raw or None,
                 final_type=final_type,
                 complexity_level=complexity_level,
                 data_source=data_source,

@@ -42,6 +42,8 @@ def test_viewer_queries(tmp_path) -> None:
     rows = get_recent_rows(db_path, project_id=9001, data_source="test", limit=10)
     assert len(rows) == 4
     assert {r["project_id"] for r in rows} == {9001}
+    assert get_recent_rows(db_path, project_ids=[9001], data_source="test", limit=10)
+    assert get_recent_rows(db_path, project_ids=[123456], data_source="test", limit=10) == []
 
     with db.connect() as conn:
         mr_id = conn.execute(
