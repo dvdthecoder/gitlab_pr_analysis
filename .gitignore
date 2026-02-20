@@ -6,3 +6,4 @@ __pycache__/
 pr_analysis.db
 exports/
 reports/
+outputs/
