@@ -27,11 +27,20 @@ from prtool.enrich import (
     get_enrich_status,
     select_enrich_candidates,
 )
-from prtool.export import export_csv, export_jsonl
+from prtool.export import export_csv, export_jsonl, export_memory_csv, export_memory_jsonl
 from prtool.gitlab_client import GitLabSourceClient
 from prtool.pipeline import classify_project, sync_backfill, sync_refresh
 from prtool.seed_data import seed_demo_data
 from prtool.viewer import run_viewer
+from prtool.memory import (
+    BaselineBuildOptions,
+    MRBuildOptions,
+    MaterializeOptions,
+    build_project_baseline,
+    build_runtime_for_project,
+    get_memory_status,
+    materialize_project_markdown_from_db,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,6 +183,67 @@ def build_parser() -> argparse.ArgumentParser:
     view_cmd = sub.add_parser("view")
     view_cmd.add_argument("--host", default="127.0.0.1")
     view_cmd.add_argument("--port", type=int, default=8765)
+
+
+    memory_cmd = sub.add_parser("memory")
+    memory_sub = memory_cmd.add_subparsers(dest="memory_command", required=True)
+
+    baseline_cmd = memory_sub.add_parser("baseline-build")
+    baseline_cmd.add_argument("--project-id", type=int, action="append")
+    baseline_cmd.add_argument("--group-id", action="append")
+    baseline_cmd.add_argument("--all-projects", action="store_true")
+    baseline_cmd.add_argument("--project-start-index", type=int, default=1)
+    baseline_cmd.add_argument("--project-count", type=int)
+    baseline_cmd.add_argument("--output-root", default="outputs/memory")
+    baseline_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    baseline_cmd.add_argument("--history-window-months", type=int, default=12)
+    baseline_cmd.add_argument("--db-only", action="store_true")
+
+    runtime_cmd = memory_sub.add_parser("mr-build")
+    runtime_cmd.add_argument("--project-id", type=int, action="append")
+    runtime_cmd.add_argument("--group-id", action="append")
+    runtime_cmd.add_argument("--all-projects", action="store_true")
+    runtime_cmd.add_argument("--project-start-index", type=int, default=1)
+    runtime_cmd.add_argument("--project-count", type=int)
+    runtime_cmd.add_argument("--output-root", default="outputs/memory")
+    runtime_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    runtime_cmd.add_argument("--include-similar-limit", type=int, default=5)
+    runtime_cmd.add_argument("--mr-limit", type=int)
+    runtime_cmd.add_argument("--compose", action=argparse.BooleanOptionalAction, default=True)
+    runtime_cmd.add_argument("--only-missing", action="store_true", default=True)
+    runtime_cmd.add_argument("--force", action="store_true")
+    runtime_cmd.add_argument("--db-only", action="store_true")
+
+    memory_status_cmd = memory_sub.add_parser("status")
+    memory_status_cmd.add_argument("--project-id", type=int, action="append")
+    memory_status_cmd.add_argument("--group-id", action="append")
+    memory_status_cmd.add_argument("--all-projects", action="store_true")
+    memory_status_cmd.add_argument("--project-start-index", type=int, default=1)
+    memory_status_cmd.add_argument("--project-count", type=int)
+    memory_status_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    memory_status_cmd.add_argument("--format", choices=["text", "json"], default="text")
+
+    memory_export_cmd = memory_sub.add_parser("export")
+    memory_export_cmd.add_argument("--project-id", type=int, action="append")
+    memory_export_cmd.add_argument("--group-id", action="append")
+    memory_export_cmd.add_argument("--all-projects", action="store_true")
+    memory_export_cmd.add_argument("--project-start-index", type=int, default=1)
+    memory_export_cmd.add_argument("--project-count", type=int)
+    memory_export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
+    memory_export_cmd.add_argument("--out-dir", default="./exports")
+
+    memory_materialize_cmd = memory_sub.add_parser("materialize")
+    memory_materialize_cmd.add_argument("--project-id", type=int, action="append")
+    memory_materialize_cmd.add_argument("--group-id", action="append")
+    memory_materialize_cmd.add_argument("--all-projects", action="store_true")
+    memory_materialize_cmd.add_argument("--project-start-index", type=int, default=1)
+    memory_materialize_cmd.add_argument("--project-count", type=int)
+    memory_materialize_cmd.add_argument("--output-root", default="outputs/memory")
+    memory_materialize_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    memory_materialize_cmd.add_argument("--mr-limit", type=int)
+    memory_materialize_cmd.add_argument("--compose", action=argparse.BooleanOptionalAction, default=True)
+    memory_materialize_cmd.add_argument("--only-missing", action="store_true", default=True)
+    memory_materialize_cmd.add_argument("--force", action="store_true")
 
     cleanup_cmd = sub.add_parser("cleanup")
     cleanup_cmd.add_argument("--data-source", choices=["test", "production"], default="test")
@@ -721,6 +791,141 @@ def main(argv: list[str] | None = None) -> int:
                 f"{row.get('compact_markdown_path') or ''}\t{row.get('overview_mermaid_path') or ''}\t"
                 f"{row.get('compacted_at') or ''}"
             )
+        return 0
+
+
+
+    if args.command == "memory" and args.memory_command == "baseline-build":
+        db.init_schema()
+        project_ids = _resolve_project_scope_ids(args)
+        print(f"Selected projects ({len(project_ids)}): {project_ids}")
+        total = 0
+        for project_id in project_ids:
+            row = build_project_baseline(
+                db,
+                project_id,
+                BaselineBuildOptions(
+                    output_root=args.output_root,
+                    data_source=args.data_source,
+                    history_window_months=args.history_window_months,
+                    db_only=args.db_only,
+                ),
+            )
+            total += 1
+            print(
+                f"[project {project_id}] Baseline built: sample_size={row['sample_size']} path={row['markdown_path']}"
+            )
+        print(f"Baseline total across projects: {total}")
+        return 0
+
+    if args.command == "memory" and args.memory_command == "mr-build":
+        db.init_schema()
+        project_ids = _resolve_project_scope_ids(args)
+        print(f"Selected projects ({len(project_ids)}): {project_ids}")
+        total_eligible = 0
+        total_success = 0
+        total_failed = 0
+        total_skipped = 0
+        for project_id in project_ids:
+            result = build_runtime_for_project(
+                db,
+                project_id,
+                MRBuildOptions(
+                    output_root=args.output_root,
+                    data_source=args.data_source,
+                    include_similar_limit=args.include_similar_limit,
+                    compose=args.compose,
+                    only_missing=args.only_missing and not args.force,
+                    force=args.force,
+                    mr_limit=args.mr_limit,
+                    db_only=args.db_only,
+                ),
+            )
+            total_eligible += int(result['eligible'])
+            total_success += int(result['success'])
+            total_failed += int(result['failed'])
+            total_skipped += int(result['skipped'])
+            print(
+                f"[project {project_id}] Memory runtime complete: "
+                f"eligible={result['eligible']} success={result['success']} "
+                f"failed={result['failed']} skipped={result['skipped']}"
+            )
+        print(
+            f"Memory runtime total: eligible={total_eligible} success={total_success} "
+            f"failed={total_failed} skipped={total_skipped}"
+        )
+        return 0
+
+    if args.command == "memory" and args.memory_command == "status":
+        db.init_schema()
+        project_ids = _resolve_project_scope_ids(args)
+        rows = get_memory_status(db, project_ids, data_source=args.data_source)
+        if args.format == "json":
+            print(json.dumps(rows))
+            return 0
+        print("project_id	eligible	scored	memory_updated_at	baseline_sample_size	baseline_markdown_path	baseline_updated_at")
+        for row in rows:
+            print(
+                f"{row['project_id']}	{row['eligible']}	{row['scored']}	"
+                f"{row.get('memory_updated_at') or ''}	{row.get('baseline_sample_size') or 0}	"
+                f"{row.get('baseline_markdown_path') or ''}	{row.get('baseline_updated_at') or ''}"
+            )
+        return 0
+
+
+
+    if args.command == "memory" and args.memory_command == "export":
+        db.init_schema()
+        project_ids: list[int] | None = None
+        if getattr(args, "project_id", None) or getattr(args, "group_id", None) or getattr(args, "all_projects", False):
+            project_ids = _resolve_project_scope_ids(args)
+        base_stem = _resolve_export_stem(args).replace("mr_classification", "mr_memory")
+        outputs: list[str] = []
+        if args.format in ("csv", "both"):
+            outputs.append(str(export_memory_csv(db, out_dir=args.out_dir, project_ids=project_ids, filename_stem=base_stem)))
+        if args.format in ("jsonl", "both"):
+            outputs.append(str(export_memory_jsonl(db, out_dir=args.out_dir, project_ids=project_ids, filename_stem=base_stem)))
+        print("Memory exported:\n" + "\n".join(outputs))
+        return 0
+
+    if args.command == "memory" and args.memory_command == "materialize":
+        db.init_schema()
+        project_ids = _resolve_project_scope_ids(args)
+        print(f"Selected projects ({len(project_ids)}): {project_ids}")
+        total_baseline_written = 0
+        total_runtime_eligible = 0
+        total_runtime_written = 0
+        total_runtime_skipped = 0
+        for project_id in project_ids:
+            result = materialize_project_markdown_from_db(
+                db,
+                project_id,
+                MaterializeOptions(
+                    output_root=args.output_root,
+                    data_source=args.data_source,
+                    compose=args.compose,
+                    only_missing=args.only_missing and not args.force,
+                    force=args.force,
+                    mr_limit=args.mr_limit,
+                ),
+            )
+            total_baseline_written += int(result["baseline_written"])
+            total_runtime_eligible += int(result["runtime_eligible"])
+            total_runtime_written += int(result["runtime_written"])
+            total_runtime_skipped += int(result["runtime_skipped"])
+            print(
+                f"[project {project_id}] Materialize complete: "
+                f"baseline_written={result['baseline_written']} "
+                f"runtime_eligible={result['runtime_eligible']} "
+                f"runtime_written={result['runtime_written']} "
+                f"runtime_skipped={result['runtime_skipped']}"
+            )
+        print(
+            f"Materialize total: baseline_written={total_baseline_written} "
+            f"runtime_eligible={total_runtime_eligible} "
+            f"runtime_written={total_runtime_written} "
+            f"runtime_skipped={total_runtime_skipped}"
+        )
         return 0
 
     if args.command == "cleanup":

@@ -13,6 +13,8 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
         mr_cols = {r[1] for r in conn.execute("PRAGMA table_info(merge_requests)").fetchall()}
         qodo_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_qodo_describe)").fetchall()}
         comp_cols = {r[1] for r in conn.execute("PRAGMA table_info(project_qodo_compaction)").fetchall()}
+        mem_base_cols = {r[1] for r in conn.execute("PRAGMA table_info(project_memory_baseline)").fetchall()}
+        mem_runtime_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_memory_runtime)").fetchall()}
 
     assert "infra_ticket_match_count" in feature_cols
     assert "infra_keyword_score" in feature_cols
@@ -33,3 +35,8 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
     assert "markdown_path" in qodo_cols
     assert "qodo_type" in qodo_cols
     assert "compact_markdown_path" in comp_cols
+    assert "baseline_json" in mem_base_cols
+    assert "markdown_path" in mem_base_cols
+    assert "mr_outcome" in mem_runtime_cols
+    assert "regression_probability" in mem_runtime_cols
+    assert "review_depth_required" in mem_runtime_cols

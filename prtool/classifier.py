@@ -23,7 +23,7 @@ class ClassificationConfig:
     infra_weak_threshold: float
 
 
-CLASSIFIER_VERSION = "v2.2"
+CLASSIFIER_VERSION = "v2.3"
 
 
 def infer_base_type(mr: dict[str, Any], files: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -207,7 +207,7 @@ def compute_confidence(
     mr: dict[str, Any],
     files: list[dict[str, Any]],
     capability_tags: list[str],
-    infra_intent_override: bool = False,
+    infra_intent_override_applied: bool = False,
 ) -> float:
     text, paths = _joined_text_and_paths(mr, files)
     score = 0.55
@@ -224,7 +224,7 @@ def compute_confidence(
         t.startswith("infra.") for t in capability_tags
     ):
         score -= 0.08
-    if infra_intent_override:
+    if infra_intent_override_applied:
         score += 0.08
 
     return max(0.3, min(0.95, round(score, 3)))
@@ -264,14 +264,28 @@ def classify(
     infra_override_applied = infra_signal_score >= config.infra_strong_threshold
 
     infra_intent_override, infra_intent_evidence = detect_infra_intent_override(mr, files)
+    infra_path_strong = any(e.startswith("path:") for e in infra_intent_evidence)
 
-    final_type = "infra" if (infra_override_applied or infra_intent_override) else base_type
-    infra_override_applied = infra_override_applied or infra_intent_override
+    intent_override_applied = False
+    if infra_intent_override:
+        if base_type in {"bugfix", "chore"}:
+            intent_override_applied = infra_path_strong
+        else:
+            intent_override_applied = True
+
+    final_type = "infra" if (infra_override_applied or intent_override_applied) else base_type
+    infra_override_applied = infra_override_applied or intent_override_applied
     is_infra_related = is_infra_related or infra_intent_override
 
     capability_tags, capability_evidence = detect_capability_tags(mr, files, features, final_type)
     risk_tags = detect_risk_tags(mr, files, features, capability_tags, final_type)
-    confidence = compute_confidence(base_type, mr, files, capability_tags, infra_intent_override=infra_intent_override)
+    confidence = compute_confidence(
+        base_type,
+        mr,
+        files,
+        capability_tags,
+        infra_intent_override_applied=intent_override_applied,
+    )
 
     c_score, c_level = complexity_score(features)
 
@@ -284,6 +298,8 @@ def classify(
         "matched_infra_labels": features.get("matched_infra_labels", []),
         "infra_intent_override": infra_intent_override,
         "infra_intent_evidence": infra_intent_evidence,
+        "infra_path_strong": infra_path_strong,
+        "intent_override_applied": intent_override_applied,
         "capability_tag_evidence": capability_evidence,
         "risk_tags": risk_tags,
         "complexity_components": {

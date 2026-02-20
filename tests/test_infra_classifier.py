@@ -149,7 +149,7 @@ def test_snyk_signal_maps_to_security_tag() -> None:
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
     assert "security.sca" in result["capability_tags"]
     assert "risk.security" in result["risk_tags"]
-    assert result["classifier_version"] == "v2.2"
+    assert result["classifier_version"] == "v2.3"
 
 
 def test_deploy_pipeline_title_overrides_to_infra_even_without_strong_infra_score() -> None:
@@ -210,7 +210,7 @@ def test_classifier_version_bumped_after_rule_update() -> None:
         pipelines={"failed_count": 0},
     )
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
-    assert result["classifier_version"] == "v2.2"
+    assert result["classifier_version"] == "v2.3"
 
 
 
@@ -252,3 +252,44 @@ def test_lambda_title_overrides_to_infra() -> None:
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
     assert result["final_type"] == "infra"
     assert result["infra_override_applied"] is True
+
+
+
+def test_bugfix_deploy_title_without_path_stays_bugfix() -> None:
+    extractor = FeatureExtractor(_settings())
+    mr = {
+        "title": "Fix deploy config",
+        "description": "small correction",
+        "labels": ["bug"],
+    }
+    files = [{"new_path": "src/config.ts", "additions": 3, "deletions": 1}]
+    features = extractor.extract(
+        mr,
+        commits=[],
+        files=files,
+        discussions={"thread_count": 0, "note_count": 0, "unresolved_count": 0},
+        pipelines={"failed_count": 0},
+    )
+    result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
+    assert result["base_type"] == "bugfix"
+    assert result["final_type"] == "bugfix"
+
+
+def test_bugfix_deploy_with_strong_path_overrides_to_infra() -> None:
+    extractor = FeatureExtractor(_settings())
+    mr = {
+        "title": "Fix deploy config",
+        "description": "small correction",
+        "labels": ["bug"],
+    }
+    files = [{"new_path": "scripts/deploy.sh", "additions": 3, "deletions": 1}]
+    features = extractor.extract(
+        mr,
+        commits=[],
+        files=files,
+        discussions={"thread_count": 0, "note_count": 0, "unresolved_count": 0},
+        pipelines={"failed_count": 0},
+    )
+    result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
+    assert result["base_type"] == "bugfix"
+    assert result["final_type"] == "infra"

@@ -198,6 +198,51 @@ CREATE TABLE IF NOT EXISTS mr_qodo_artifacts (
   FOREIGN KEY(mr_id) REFERENCES merge_requests(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS project_memory_baseline (
+  project_id INTEGER PRIMARY KEY,
+  group_path TEXT,
+  history_window_months INTEGER NOT NULL,
+  sample_size INTEGER NOT NULL,
+  baseline_json TEXT NOT NULL,
+  markdown_path TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mr_memory_runtime (
+  mr_id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL,
+  mr_iid INTEGER NOT NULL,
+  mr_outcome TEXT NOT NULL,
+  regression_probability REAL NOT NULL,
+  review_depth_required TEXT NOT NULL,
+  assessment_json TEXT NOT NULL,
+  similar_mrs_json TEXT NOT NULL,
+  addendum_markdown_path TEXT NOT NULL,
+  context_markdown_path TEXT,
+  memory_score_version TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(mr_id) REFERENCES merge_requests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS memory_runs (
+  id INTEGER PRIMARY KEY,
+  run_type TEXT NOT NULL,
+  scope_json TEXT NOT NULL,
+  mode TEXT,
+  eligible_count INTEGER NOT NULL,
+  success_count INTEGER NOT NULL,
+  failed_count INTEGER NOT NULL,
+  skipped_count INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_excerpt TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_mrs_project_iid ON merge_requests(project_id, iid);
 CREATE INDEX IF NOT EXISTS idx_mrs_updated_at ON merge_requests(updated_at);
 CREATE INDEX IF NOT EXISTS idx_commits_mr_id ON mr_commits(mr_id);
@@ -205,6 +250,9 @@ CREATE INDEX IF NOT EXISTS idx_files_mr_id ON mr_files(mr_id);
 CREATE INDEX IF NOT EXISTS idx_qodo_runs_mr_started ON mr_qodo_runs(mr_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_qodo_runs_status ON mr_qodo_runs(status);
 CREATE INDEX IF NOT EXISTS idx_qodo_artifacts_project_tool ON mr_qodo_artifacts(project_id, tool, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_runtime_project_iid ON mr_memory_runtime(project_id, mr_iid);
+CREATE INDEX IF NOT EXISTS idx_memory_runtime_depth_risk ON mr_memory_runtime(review_depth_required, regression_probability DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_runtime_updated ON mr_memory_runtime(updated_at DESC);
 """
 
 
@@ -268,6 +316,9 @@ class Database:
         qodo_run_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_qodo_runs)").fetchall()}
         if "tool" not in qodo_run_columns:
             conn.execute("ALTER TABLE mr_qodo_runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'describe'")
+        memory_runtime_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_memory_runtime)").fetchall()}
+        if memory_runtime_columns and "memory_score_version" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN memory_score_version TEXT NOT NULL DEFAULT 'memory-v1'")
 
         # Backfill legacy describe rows into tool-specific artifacts table for compatibility.
         conn.execute(
@@ -730,5 +781,100 @@ class Database:
                 row["source_mr_count"],
                 row["content_sha256"],
                 row["updated_at"],
+            ),
+        )
+
+
+    def upsert_project_memory_baseline(self, conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+        conn.execute(
+            """
+            INSERT INTO project_memory_baseline (
+              project_id, group_path, history_window_months, sample_size,
+              baseline_json, markdown_path, content_sha256, generated_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id) DO UPDATE SET
+              group_path=excluded.group_path,
+              history_window_months=excluded.history_window_months,
+              sample_size=excluded.sample_size,
+              baseline_json=excluded.baseline_json,
+              markdown_path=excluded.markdown_path,
+              content_sha256=excluded.content_sha256,
+              generated_at=excluded.generated_at,
+              updated_at=excluded.updated_at
+            """,
+            (
+                row["project_id"],
+                row.get("group_path"),
+                int(row["history_window_months"]),
+                int(row["sample_size"]),
+                json.dumps(row["baseline_json"]),
+                row["markdown_path"],
+                row["content_sha256"],
+                row["generated_at"],
+                row["updated_at"],
+            ),
+        )
+
+    def upsert_mr_memory_runtime(self, conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+        conn.execute(
+            """
+            INSERT INTO mr_memory_runtime (
+              mr_id, project_id, mr_iid, mr_outcome, regression_probability, review_depth_required,
+              assessment_json, similar_mrs_json, addendum_markdown_path, context_markdown_path,
+              memory_score_version, content_sha256, generated_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(mr_id) DO UPDATE SET
+              project_id=excluded.project_id,
+              mr_iid=excluded.mr_iid,
+              mr_outcome=excluded.mr_outcome,
+              regression_probability=excluded.regression_probability,
+              review_depth_required=excluded.review_depth_required,
+              assessment_json=excluded.assessment_json,
+              similar_mrs_json=excluded.similar_mrs_json,
+              addendum_markdown_path=excluded.addendum_markdown_path,
+              context_markdown_path=excluded.context_markdown_path,
+              memory_score_version=excluded.memory_score_version,
+              content_sha256=excluded.content_sha256,
+              generated_at=excluded.generated_at,
+              updated_at=excluded.updated_at
+            """,
+            (
+                row["mr_id"],
+                row["project_id"],
+                row["mr_iid"],
+                row["mr_outcome"],
+                float(row["regression_probability"]),
+                row["review_depth_required"],
+                json.dumps(row["assessment_json"]),
+                json.dumps(row["similar_mrs_json"]),
+                row["addendum_markdown_path"],
+                row.get("context_markdown_path"),
+                row.get("memory_score_version", "memory-v1"),
+                row["content_sha256"],
+                row["generated_at"],
+                row["updated_at"],
+            ),
+        )
+
+    def insert_memory_run(self, conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+        conn.execute(
+            """
+            INSERT INTO memory_runs (
+              run_type, scope_json, mode, eligible_count, success_count, failed_count, skipped_count,
+              started_at, finished_at, status, error_excerpt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["run_type"],
+                json.dumps(row.get("scope_json", {})),
+                row.get("mode"),
+                int(row.get("eligible_count", 0)),
+                int(row.get("success_count", 0)),
+                int(row.get("failed_count", 0)),
+                int(row.get("skipped_count", 0)),
+                row["started_at"],
+                row["finished_at"],
+                row["status"],
+                row.get("error_excerpt"),
             ),
         )

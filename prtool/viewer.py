@@ -17,6 +17,7 @@ SORT_SQL = {
     "updated_desc": "m.updated_at DESC",
     "complexity_desc": "c.complexity_score DESC, m.updated_at DESC",
     "complexity_asc": "c.complexity_score ASC, m.updated_at DESC",
+    "risk_desc": "COALESCE(r.regression_probability, 0.0) DESC, c.complexity_score DESC, m.updated_at DESC",
 }
 
 
@@ -31,6 +32,8 @@ def _filter_sql(
     project_ids: list[int] | None,
     final_type: str | None,
     complexity_level: str | None,
+    mr_outcome: str | None,
+    review_depth_required: str | None,
     data_source: str,
 ) -> tuple[str, tuple[Any, ...]]:
     clauses: list[str] = []
@@ -49,6 +52,12 @@ def _filter_sql(
     if complexity_level:
         clauses.append("c.complexity_level = ?")
         params.append(complexity_level)
+    if mr_outcome:
+        clauses.append("COALESCE(r.mr_outcome, '') = ?")
+        params.append(mr_outcome)
+    if review_depth_required:
+        clauses.append("COALESCE(r.review_depth_required, '') = ?")
+        params.append(review_depth_required)
     if data_source != "all":
         clauses.append("m.data_source = ?")
         params.append(data_source)
@@ -117,6 +126,8 @@ def get_type_counts(
         project_ids=project_ids,
         final_type=None,
         complexity_level=complexity_level,
+        mr_outcome=None,
+        review_depth_required=None,
         data_source=data_source,
     )
     with _open_conn(db_path) as conn:
@@ -125,6 +136,7 @@ def get_type_counts(
             SELECT c.final_type, COUNT(*) as cnt
             FROM mr_classifications c
             JOIN merge_requests m ON m.id = c.mr_id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = c.mr_id
             {where}
             GROUP BY c.final_type
             ORDER BY cnt DESC, c.final_type ASC
@@ -140,6 +152,8 @@ def get_overview(
     project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
+    mr_outcome: str | None = None,
+    review_depth_required: str | None = None,
     data_source: str = "production",
 ) -> dict[str, Any]:
     where, params = _filter_sql(
@@ -147,6 +161,8 @@ def get_overview(
         project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
 
@@ -157,9 +173,11 @@ def get_overview(
               COUNT(*) as total_mrs,
               SUM(CASE WHEN c.is_infra_related = 1 THEN 1 ELSE 0 END) as infra_related,
               AVG(c.complexity_score) as avg_complexity,
+              AVG(COALESCE(r.regression_probability, 0.0)) as avg_regression_probability,
               SUM(CASE WHEN c.complexity_level IN ('High','Very High') THEN 1 ELSE 0 END) as high_complexity
             FROM mr_classifications c
             JOIN merge_requests m ON m.id = c.mr_id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = c.mr_id
             {where}
             """,
             params,
@@ -173,6 +191,7 @@ def get_overview(
         "infra_related": int(row["infra_related"] or 0),
         "avg_complexity": float(row["avg_complexity"] or 0.0),
         "high_complexity": int(row["high_complexity"] or 0),
+        "avg_regression_probability": float(row["avg_regression_probability"] or 0.0),
     }
 
 
@@ -181,6 +200,8 @@ def get_heatmap(
     project_id: int | None = None,
     project_ids: list[int] | None = None,
     final_type: str | None = None,
+    mr_outcome: str | None = None,
+    review_depth_required: str | None = None,
     data_source: str = "production",
 ) -> tuple[list[str], dict[str, dict[str, int]], int]:
     where, params = _filter_sql(
@@ -188,6 +209,8 @@ def get_heatmap(
         project_ids=project_ids,
         final_type=final_type,
         complexity_level=None,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
 
@@ -197,6 +220,7 @@ def get_heatmap(
             SELECT c.final_type, c.complexity_level, COUNT(*) as cnt
             FROM mr_classifications c
             JOIN merge_requests m ON m.id = c.mr_id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = c.mr_id
             {where}
             GROUP BY c.final_type, c.complexity_level
             """,
@@ -221,6 +245,8 @@ def get_recent_rows(
     project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
+    mr_outcome: str | None = None,
+    review_depth_required: str | None = None,
     data_source: str = "production",
     limit: int = 200,
     sort_by: str = "complexity_desc",
@@ -230,6 +256,8 @@ def get_recent_rows(
         project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
 
@@ -249,6 +277,9 @@ def get_recent_rows(
               c.capability_tags_json,
               c.risk_tags_json,
               c.classification_confidence,
+              r.mr_outcome,
+              r.regression_probability,
+              r.review_depth_required,
               f.files_changed,
               f.churn,
               f.commit_count,
@@ -260,6 +291,7 @@ def get_recent_rows(
             FROM mr_classifications c
             JOIN merge_requests m ON m.id = c.mr_id
             LEFT JOIN mr_features f ON f.mr_id = c.mr_id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = c.mr_id
             {where}
             ORDER BY {order_sql}
             LIMIT ?
@@ -276,6 +308,8 @@ def get_enrichment_rows(
     project_ids: list[int] | None = None,
     final_type: str | None = None,
     complexity_level: str | None = None,
+    mr_outcome: str | None = None,
+    review_depth_required: str | None = None,
     data_source: str = "production",
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -284,6 +318,8 @@ def get_enrichment_rows(
         project_ids=project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
     with _open_conn(db_path) as conn:
@@ -300,6 +336,7 @@ def get_enrichment_rows(
             FROM mr_qodo_describe q
             JOIN merge_requests m ON m.id = q.mr_id
             LEFT JOIN mr_classifications c ON c.mr_id = m.id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = m.id
             {where}
             ORDER BY q.updated_at DESC
             LIMIT ?
@@ -383,6 +420,8 @@ def _html_page(
     group_id: str | None,
     final_type: str | None,
     complexity_level: str | None,
+    mr_outcome: str | None,
+    review_depth_required: str | None,
     data_source: str,
     limit: int,
     sort_by: str,
@@ -395,6 +434,8 @@ def _html_page(
         project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
     type_counts = get_type_counts(
@@ -410,6 +451,8 @@ def _html_page(
         project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
         limit=limit,
         sort_by=sort_by,
@@ -419,6 +462,8 @@ def _html_page(
         project_id=project_id,
         project_ids=group_project_ids,
         final_type=final_type,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
     )
     enrich_rows = get_enrichment_rows(
@@ -427,6 +472,8 @@ def _html_page(
         project_ids=group_project_ids,
         final_type=final_type,
         complexity_level=complexity_level,
+        mr_outcome=mr_outcome,
+        review_depth_required=review_depth_required,
         data_source=data_source,
         limit=min(limit, 300),
     )
@@ -453,6 +500,20 @@ def _html_page(
         selected = " selected" if complexity_level == level else ""
         complexity_options.append(f'<option value="{level}"{selected}>{level}</option>')
 
+    outcome_values = ["", "below_baseline", "at_baseline", "above_baseline"]
+    outcome_options = []
+    for val in outcome_values:
+        selected = " selected" if (mr_outcome or "") == val else ""
+        label = "All" if not val else val
+        outcome_options.append(f'<option value="{val}"{selected}>{label}</option>')
+
+    depth_values = ["", "shallow", "standard", "deep"]
+    depth_options = []
+    for val in depth_values:
+        selected = " selected" if (review_depth_required or "") == val else ""
+        label = "All" if not val else val
+        depth_options.append(f'<option value="{val}"{selected}>{label}</option>')
+
     data_source_options = []
     for ds in DATA_SOURCES:
         selected = " selected" if data_source == ds else ""
@@ -461,6 +522,7 @@ def _html_page(
     sort_options = []
     for key, label in [
         ("complexity_desc", "Complexity desc"),
+        ("risk_desc", "Regression risk desc"),
         ("complexity_asc", "Complexity asc"),
         ("updated_desc", "Updated desc"),
     ]:
@@ -483,6 +545,9 @@ def _html_page(
             f"<td>{html.escape(str(r['capability_tags_json'] or '[]'))}</td>"
             f"<td>{html.escape(str(r['risk_tags_json'] or '[]'))}</td>"
             f"<td>{float(r['classification_confidence'] or 0.0):.2f}</td>"
+            f"<td>{html.escape(str(r['mr_outcome'] or ''))}</td>"
+            f"<td>{float(r['regression_probability'] or 0.0):.2f}</td>"
+            f"<td>{html.escape(str(r['review_depth_required'] or ''))}</td>"
             f"<td>{int(r['files_changed'] or 0)}</td>"
             f"<td>{int(r['churn'] or 0)}</td>"
             f"<td>{int(r['commit_count'] or 0)}</td>"
@@ -493,7 +558,7 @@ def _html_page(
             "</tr>"
         )
 
-    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='17'>No rows found</td></tr>"
+    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='20'>No rows found</td></tr>"
     heatmap_html = _render_heatmap(heat_rows, heat_matrix, heat_max)
 
     compaction_rows = []
@@ -575,6 +640,8 @@ small {{ color: #6b7280; }}
   <div><label>Project</label><br /><select name="project_id">{''.join(project_options)}</select></div>
   <div><label>Final type</label><br /><select name="final_type">{''.join(type_options)}</select></div>
   <div><label>Complexity</label><br /><select name="complexity_level">{''.join(complexity_options)}</select></div>
+  <div><label>Outcome</label><br /><select name="mr_outcome">{''.join(outcome_options)}</select></div>
+  <div><label>Review depth</label><br /><select name="review_depth_required">{''.join(depth_options)}</select></div>
   <div><label>Data source</label><br /><select name="data_source">{''.join(data_source_options)}</select></div>
   <div><label>Sort</label><br /><select name="sort">{''.join(sort_options)}</select></div>
   <div><label>Rows</label><br /><input type="number" name="limit" value="{limit}" min="1" max="1000" /></div>
@@ -592,7 +659,7 @@ small {{ color: #6b7280; }}
   <thead>
     <tr>
       <th>Project</th><th>MR IID</th><th>Title</th><th>Base</th><th>Final</th>
-      <th>Complexity</th><th>Score</th><th>Tags</th><th>Risks</th><th>Conf</th><th>Files</th><th>Churn</th><th>Commits</th>
+      <th>Complexity</th><th>Score</th><th>Tags</th><th>Risks</th><th>Conf</th><th>Outcome</th><th>RegProb</th><th>Depth</th><th>Files</th><th>Churn</th><th>Commits</th>
       <th>Comments</th><th>Unresolved</th><th>CI Failed</th><th>Updated</th>
     </tr>
   </thead>
@@ -676,6 +743,8 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
             group_id_raw = params.get("group_id", [""])[0].strip()
             final_type_raw = params.get("final_type", [""])[0].strip()
             complexity_level_raw = params.get("complexity_level", [""])[0].strip()
+            mr_outcome_raw = params.get("mr_outcome", [""])[0].strip()
+            review_depth_raw = params.get("review_depth_required", [""])[0].strip()
             data_source_raw = params.get("data_source", ["production"])[0].strip()
             limit_raw = params.get("limit", ["200"])[0].strip()
             sort_raw = params.get("sort", ["complexity_desc"])[0].strip()
@@ -683,6 +752,8 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
             project_id = int(project_id_raw) if project_id_raw else None
             final_type = final_type_raw or None
             complexity_level = complexity_level_raw or None
+            mr_outcome = mr_outcome_raw or None
+            review_depth_required = review_depth_raw or None
             data_source = data_source_raw if data_source_raw in DATA_SOURCES else "production"
 
             try:
@@ -698,6 +769,8 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
                 group_id=group_id_raw or None,
                 final_type=final_type,
                 complexity_level=complexity_level,
+                mr_outcome=mr_outcome,
+                review_depth_required=review_depth_required,
                 data_source=data_source,
                 limit=limit,
                 sort_by=sort_by,

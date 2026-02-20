@@ -35,6 +35,7 @@ def test_viewer_queries(tmp_path) -> None:
 
     overview = get_overview(db_path, project_id=9001, data_source="test")
     assert overview["total_mrs"] == 4
+    assert "avg_regression_probability" in overview
 
     type_counts = dict(get_type_counts(db_path, project_id=9001, data_source="test"))
     assert sum(type_counts.values()) == 4
@@ -77,6 +78,36 @@ def test_viewer_queries(tmp_path) -> None:
                 "updated_at": "2026-02-18T00:00:00Z",
             },
         )
+
+        db.upsert_mr_memory_runtime(
+            conn,
+            {
+                "mr_id": int(mr_id),
+                "project_id": 9001,
+                "mr_iid": 1,
+                "mr_outcome": "above_baseline",
+                "regression_probability": 0.7,
+                "review_depth_required": "deep",
+                "assessment_json": {"ok": True},
+                "similar_mrs_json": [],
+                "addendum_markdown_path": "outputs/memory/projects/9001/mrs/1/addendum.md",
+                "context_markdown_path": "outputs/memory/projects/9001/mrs/1/context.md",
+                "memory_score_version": "memory-v1",
+                "content_sha256": "abc",
+                "generated_at": "2026-02-18T00:00:00Z",
+                "updated_at": "2026-02-18T00:00:00Z",
+            },
+        )
+
+    filtered_rows = get_recent_rows(
+        db_path,
+        project_id=9001,
+        data_source="test",
+        mr_outcome="above_baseline",
+        review_depth_required="deep",
+        limit=10,
+    )
+    assert len(filtered_rows) == 1
 
     enrich_rows = get_enrichment_rows(db_path, project_id=9001, data_source="test", limit=10)
     assert len(enrich_rows) == 1
