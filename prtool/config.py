@@ -38,6 +38,7 @@ class Settings:
     infra_keyword_list: list[str]
     infra_strong_threshold: float
     infra_weak_threshold: float
+    classification_needs_review_threshold: float = 0.75
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class PartialSettings:
     infra_keyword_list: list[str]
     infra_strong_threshold: float
     infra_weak_threshold: float
+    classification_needs_review_threshold: float = 0.75
 
 
 def _split_csv(value: str | None, default: list[str]) -> list[str]:
@@ -116,6 +118,7 @@ def load_partial_settings() -> PartialSettings:
         infra_keyword_list=[s.lower() for s in _split_csv(os.getenv("INFRA_KEYWORD_LIST"), DEFAULT_INFRA_KEYWORDS)],
         infra_strong_threshold=float(os.getenv("INFRA_STRONG_THRESHOLD", "4.0")),
         infra_weak_threshold=float(os.getenv("INFRA_WEAK_THRESHOLD", "1.5")),
+        classification_needs_review_threshold=float(os.getenv("CLASSIFICATION_NEEDS_REVIEW_THRESHOLD", "0.75")),
     )
 
 
@@ -142,4 +145,5 @@ def load_settings() -> Settings:
         infra_keyword_list=partial.infra_keyword_list,
         infra_strong_threshold=partial.infra_strong_threshold,
         infra_weak_threshold=partial.infra_weak_threshold,
+        classification_needs_review_threshold=partial.classification_needs_review_threshold,
     )

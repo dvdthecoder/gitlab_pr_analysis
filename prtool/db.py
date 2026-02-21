@@ -105,6 +105,8 @@ CREATE TABLE IF NOT EXISTS mr_classifications (
   capability_tags_json TEXT NOT NULL DEFAULT '[]',
   risk_tags_json TEXT NOT NULL DEFAULT '[]',
   classification_confidence REAL NOT NULL DEFAULT 0.5,
+  confidence_band TEXT NOT NULL DEFAULT 'medium',
+  needs_review INTEGER NOT NULL DEFAULT 0,
   classifier_version TEXT NOT NULL DEFAULT 'v1.0',
   classification_rationale_json TEXT NOT NULL,
   classified_at TEXT NOT NULL,
@@ -215,6 +217,13 @@ CREATE TABLE IF NOT EXISTS mr_memory_runtime (
   project_id INTEGER NOT NULL,
   mr_iid INTEGER NOT NULL,
   mr_outcome TEXT NOT NULL,
+  mr_achieved_outcome TEXT,
+  mr_achieved_outcome_bullets_json TEXT NOT NULL DEFAULT '[]',
+  outcome_source TEXT NOT NULL DEFAULT 'heuristic',
+  outcome_mode TEXT NOT NULL DEFAULT 'template',
+  outcome_quality_score REAL NOT NULL DEFAULT 0.0,
+  topic_labels_json TEXT NOT NULL DEFAULT '[]',
+  similarity_strategy TEXT NOT NULL DEFAULT 'lexical',
   regression_probability REAL NOT NULL,
   review_depth_required TEXT NOT NULL,
   assessment_json TEXT NOT NULL,
@@ -297,6 +306,10 @@ class Database:
             conn.execute("ALTER TABLE mr_classifications ADD COLUMN risk_tags_json TEXT NOT NULL DEFAULT '[]'")
         if "classification_confidence" not in class_cols:
             conn.execute("ALTER TABLE mr_classifications ADD COLUMN classification_confidence REAL NOT NULL DEFAULT 0.5")
+        if "confidence_band" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN confidence_band TEXT NOT NULL DEFAULT 'medium'")
+        if "needs_review" not in class_cols:
+            conn.execute("ALTER TABLE mr_classifications ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0")
         if "classifier_version" not in class_cols:
             conn.execute("ALTER TABLE mr_classifications ADD COLUMN classifier_version TEXT NOT NULL DEFAULT 'v1.0'")
 
@@ -319,6 +332,20 @@ class Database:
         memory_runtime_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_memory_runtime)").fetchall()}
         if memory_runtime_columns and "memory_score_version" not in memory_runtime_columns:
             conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN memory_score_version TEXT NOT NULL DEFAULT 'memory-v1'")
+        if memory_runtime_columns and "mr_achieved_outcome" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN mr_achieved_outcome TEXT")
+        if memory_runtime_columns and "mr_achieved_outcome_bullets_json" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN mr_achieved_outcome_bullets_json TEXT NOT NULL DEFAULT '[]'")
+        if memory_runtime_columns and "outcome_source" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN outcome_source TEXT NOT NULL DEFAULT 'heuristic'")
+        if memory_runtime_columns and "outcome_mode" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN outcome_mode TEXT NOT NULL DEFAULT 'template'")
+        if memory_runtime_columns and "outcome_quality_score" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN outcome_quality_score REAL NOT NULL DEFAULT 0.0")
+        if memory_runtime_columns and "topic_labels_json" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN topic_labels_json TEXT NOT NULL DEFAULT '[]'")
+        if memory_runtime_columns and "similarity_strategy" not in memory_runtime_columns:
+            conn.execute("ALTER TABLE mr_memory_runtime ADD COLUMN similarity_strategy TEXT NOT NULL DEFAULT 'lexical'")
 
         # Backfill legacy describe rows into tool-specific artifacts table for compatibility.
         conn.execute(
@@ -510,8 +537,8 @@ class Database:
             INSERT INTO mr_classifications (
               mr_id, base_type, final_type, is_infra_related, infra_override_applied,
               complexity_level, complexity_score, capability_tags_json, risk_tags_json,
-              classification_confidence, classifier_version, classification_rationale_json, classified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              classification_confidence, confidence_band, needs_review, classifier_version, classification_rationale_json, classified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(mr_id) DO UPDATE SET
               base_type=excluded.base_type,
               final_type=excluded.final_type,
@@ -522,6 +549,8 @@ class Database:
               capability_tags_json=excluded.capability_tags_json,
               risk_tags_json=excluded.risk_tags_json,
               classification_confidence=excluded.classification_confidence,
+              confidence_band=excluded.confidence_band,
+              needs_review=excluded.needs_review,
               classifier_version=excluded.classifier_version,
               classification_rationale_json=excluded.classification_rationale_json,
               classified_at=excluded.classified_at
@@ -537,6 +566,8 @@ class Database:
                 json.dumps(c.get("capability_tags", [])),
                 json.dumps(c.get("risk_tags", [])),
                 float(c.get("classification_confidence", 0.5)),
+                str(c.get("confidence_band", "medium")),
+                1 if c.get("needs_review", False) else 0,
                 str(c.get("classifier_version", "v1.0")),
                 json.dumps(c["rationale"]),
                 c["classified_at"],
@@ -819,14 +850,23 @@ class Database:
         conn.execute(
             """
             INSERT INTO mr_memory_runtime (
-              mr_id, project_id, mr_iid, mr_outcome, regression_probability, review_depth_required,
+              mr_id, project_id, mr_iid, mr_outcome, mr_achieved_outcome, mr_achieved_outcome_bullets_json,
+              outcome_source, outcome_mode, outcome_quality_score, topic_labels_json, similarity_strategy,
+              regression_probability, review_depth_required,
               assessment_json, similar_mrs_json, addendum_markdown_path, context_markdown_path,
               memory_score_version, content_sha256, generated_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(mr_id) DO UPDATE SET
               project_id=excluded.project_id,
               mr_iid=excluded.mr_iid,
               mr_outcome=excluded.mr_outcome,
+              mr_achieved_outcome=excluded.mr_achieved_outcome,
+              mr_achieved_outcome_bullets_json=excluded.mr_achieved_outcome_bullets_json,
+              outcome_source=excluded.outcome_source,
+              outcome_mode=excluded.outcome_mode,
+              outcome_quality_score=excluded.outcome_quality_score,
+              topic_labels_json=excluded.topic_labels_json,
+              similarity_strategy=excluded.similarity_strategy,
               regression_probability=excluded.regression_probability,
               review_depth_required=excluded.review_depth_required,
               assessment_json=excluded.assessment_json,
@@ -843,6 +883,13 @@ class Database:
                 row["project_id"],
                 row["mr_iid"],
                 row["mr_outcome"],
+                row.get("mr_achieved_outcome"),
+                json.dumps(row.get("mr_achieved_outcome_bullets", [])),
+                row.get("outcome_source", "heuristic"),
+                row.get("outcome_mode", "template"),
+                float(row.get("outcome_quality_score", 0.0)),
+                json.dumps(row.get("topic_labels", [])),
+                row.get("similarity_strategy", "lexical"),
                 float(row["regression_probability"]),
                 row["review_depth_required"],
                 json.dumps(row["assessment_json"]),

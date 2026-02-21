@@ -30,6 +30,8 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
     assert "capability_tags_json" in class_cols
     assert "risk_tags_json" in class_cols
     assert "classification_confidence" in class_cols
+    assert "confidence_band" in class_cols
+    assert "needs_review" in class_cols
     assert "classifier_version" in class_cols
     assert "data_source" in mr_cols
     assert "markdown_path" in qodo_cols
@@ -40,3 +42,8 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
     assert "mr_outcome" in mem_runtime_cols
     assert "regression_probability" in mem_runtime_cols
     assert "review_depth_required" in mem_runtime_cols
+    assert "mr_achieved_outcome" in mem_runtime_cols
+    assert "outcome_quality_score" in mem_runtime_cols
+    assert "topic_labels_json" in mem_runtime_cols
+    assert "similarity_strategy" in mem_runtime_cols
+    assert "outcome_mode" in mem_runtime_cols

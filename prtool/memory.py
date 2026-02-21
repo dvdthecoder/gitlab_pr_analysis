@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ class MRBuildOptions:
     force: bool = False
     mr_limit: int | None = None
     db_only: bool = False
+    outcome_mode: str = "template"
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,161 @@ def _infer_capabilities(title: str, description: str | None, existing: list[str]
     if "kafka" in text:
         caps.add("kafka")
     return sorted(caps)
+
+
+
+def _tokenize(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) > 2]
+
+
+def _text_similarity(a: str, b: str) -> float:
+    ta = _tokenize(a)
+    tb = _tokenize(b)
+    if not ta or not tb:
+        return 0.0
+    sa = set(ta)
+    sb = set(tb)
+    inter = len(sa & sb)
+    union = len(sa | sb)
+    if union == 0:
+        return 0.0
+    return inter / union
+
+
+def _extract_topic_labels(final_type: str, capability_tags: list[str], title: str, description: str | None) -> list[str]:
+    labels: list[str] = []
+    if final_type:
+        labels.append(final_type)
+    for tag in capability_tags:
+        labels.append(tag)
+    text = f"{title} {description or ''}".lower()
+    if "redis" in text:
+        labels.append("infra.redis")
+    if any(k in text for k in ["auth", "oauth", "jwt", "session"]):
+        labels.append("security.auth")
+    if any(k in text for k in ["payment", "checkout", "cart"]):
+        labels.append("payments.checkout")
+    if any(k in text for k in ["pipeline", "deploy", "release", "ci"]):
+        labels.append("ci.pipeline")
+    out: list[str] = []
+    for item in labels:
+        item = str(item).strip().lower()
+        if item and item not in out:
+            out.append(item)
+    return out[:6]
+
+
+def _build_template_achieved_outcome(row: dict[str, Any], topic_labels: list[str]) -> tuple[str, list[str], float]:
+    title = str(row.get("title") or "").strip()
+    final_type = str(row.get("final_type") or "change")
+    complexity = float(row.get("complexity_score") or 0.0)
+    files = int(row.get("files_changed") or 0)
+    churn = int(row.get("churn") or 0)
+    prob = float(row.get("regression_probability") or 0.0)
+
+    area = "core flows"
+    if any(t.startswith("infra") for t in topic_labels):
+        area = "infrastructure and delivery paths"
+    elif any(t.startswith("security") for t in topic_labels):
+        area = "security/auth paths"
+    elif any(t.startswith("payments") for t in topic_labels):
+        area = "checkout/payment paths"
+
+    paragraph = (
+        f"This MR delivers a {final_type} change focused on {area}. "
+        f"It modifies {files} files with churn {churn} and complexity score {complexity:.2f}, "
+        f"with estimated regression probability {prob:.2f}."
+    )
+
+    bullets = [
+        f"Change intent: {title or 'update existing behavior'}",
+        f"Primary impact area: {area}",
+        f"Operational signal: regression_probability={prob:.2f}, review_depth={row.get('review_depth_required', 'standard')}",
+    ]
+    if topic_labels:
+        bullets.append("Capability topics: " + ", ".join(topic_labels[:4]))
+
+    quality = 0.45
+    if title:
+        quality += 0.15
+    if files > 0:
+        quality += 0.1
+    if topic_labels:
+        quality += 0.2
+    if len(paragraph.split()) >= 18:
+        quality += 0.1
+    return paragraph, bullets[:6], _clamp(quality)
+
+
+def _build_semantic_local_outcome(row: dict[str, Any], topic_labels: list[str]) -> tuple[str, list[str], float]:
+    title = str(row.get("title") or "").strip()
+    description = str(row.get("description") or "").strip()
+    final_type = str(row.get("final_type") or "change")
+    prob = float(row.get("regression_probability") or 0.0)
+    depth = str(row.get("review_depth_required") or "standard")
+    paths = [p for p in str(row.get("paths_text") or "").split() if "/" in p][:5]
+
+    area = "application logic"
+    if paths:
+        first = paths[0]
+        seg = first.split("/")[0]
+        if seg and seg not in {"src", "app", "tests", "test", "lib"}:
+            area = seg.replace("-", " ")
+    if any(t.startswith("infra") for t in topic_labels):
+        area = "infrastructure and delivery"
+    elif any(t.startswith("security") for t in topic_labels):
+        area = "authentication and security"
+    elif any(t.startswith("payments") for t in topic_labels):
+        area = "checkout and payments"
+
+    intent = title or "Update behavior"
+    if ":" in intent:
+        intent = intent.split(":", 1)[1].strip() or intent
+
+    detail = description.split(".")[0].strip() if description else ""
+    if detail and len(detail) > 140:
+        detail = detail[:140].rstrip() + "..."
+
+    paragraph = f"{intent} in {area} as a {final_type} change."
+    if detail:
+        paragraph += f" {detail}."
+    paragraph += f" Review posture is {depth} (regression probability {prob:.2f})."
+
+    bullets = [
+        f"Outcome: {intent}",
+        f"Area: {area}",
+        f"Review signal: depth={depth}, regression_probability={prob:.2f}",
+    ]
+    if paths:
+        bullets.append("Touched paths: " + ", ".join(paths[:3]))
+    if topic_labels:
+        bullets.append("Capability topics: " + ", ".join(topic_labels[:4]))
+
+    quality = 0.55
+    if description:
+        quality += 0.15
+    if paths:
+        quality += 0.15
+    if topic_labels:
+        quality += 0.1
+    return paragraph, bullets[:6], _clamp(quality)
+
+
+def _build_achieved_outcome(row: dict[str, Any], topic_labels: list[str], mode: str = "template") -> tuple[str, list[str], float]:
+    if mode == "semantic-local":
+        return _build_semantic_local_outcome(row, topic_labels)
+    return _build_template_achieved_outcome(row, topic_labels)
+
+
+def _similarity_text(row: dict[str, Any]) -> str:
+    parts = [
+        str(row.get("title") or ""),
+        str(row.get("description") or ""),
+        str(row.get("final_type") or ""),
+        " ".join(_parse_json_list(row.get("capability_tags_json"))),
+        str(row.get("paths_text") or ""),
+    ]
+    return " ".join(parts)
 
 
 def _compute_regression_probability(row: dict[str, Any]) -> float:
@@ -290,23 +447,42 @@ def _render_addendum(row: dict[str, Any], assessment: dict[str, Any], similar: l
         f"regression_probability: {assessment['regression_probability']:.4f}",
         f"review_depth_required: {assessment['review_depth_required']}",
         "",
-        "### Why",
+        "## 3.1) Achieved Outcome",
+        str(assessment.get("mr_achieved_outcome") or "").strip() or "No concise achieved outcome available.",
+        "",
+        "### Outcome Highlights",
     ]
+
+    outcome_bullets = assessment.get("mr_achieved_outcome_bullets", []) or []
+    if outcome_bullets:
+        for bullet in outcome_bullets[:6]:
+            lines.append(f"- {bullet}")
+    else:
+        lines.append("- no additional highlights")
+
+    lines.extend(["", "### Why"])
     reasons = assessment.get("reasons", [])
     if reasons:
-        for reason in reasons:
+        for reason in reasons[:5]:
             lines.append(f"- {reason}")
     else:
         lines.append("- no explicit risk markers")
+
+    lines.extend(["", "### Capability Topics"])
+    topic_labels = assessment.get("topic_labels", []) or []
+    if topic_labels:
+        lines.append("- " + ", ".join(topic_labels[:6]))
+    else:
+        lines.append("- none")
 
     lines.extend(["", "## 5) Similar Historical MRs"])
     if not similar:
         lines.append("- no similar historical MRs found")
     else:
-        for item in similar:
+        for item in similar[:10]:
             lines.append(
-                f"- !{item['iid']} ({item.get('final_type')}, complexity={float(item.get('complexity_score') or 0.0):.2f}, "
-                f"risk={float(item.get('regression_probability') or 0.0):.4f})"
+                f"- !{item['iid']} ({item.get('final_type')}, similarity={float(item.get('similarity_score') or 0.0):.2f}, "
+                f"complexity={float(item.get('complexity_score') or 0.0):.2f})"
             )
     lines.append("")
     return "\n".join(lines)
@@ -378,7 +554,7 @@ def build_project_baseline(db: Database, project_id: int, opts: BaselineBuildOpt
     return row
 
 
-def _similar_rows(conn: Any, project_id: int, mr_id: int, final_type: str, complexity_score: float, limit: int, data_source: str) -> list[dict[str, Any]]:
+def _similar_rows(conn: Any, seed_row: dict[str, Any], project_id: int, mr_id: int, final_type: str, complexity_score: float, limit: int, data_source: str) -> list[dict[str, Any]]:
     clauses = ["m.project_id = ?", "m.id != ?"]
     params: list[Any] = [project_id, mr_id]
     if data_source != "all":
@@ -387,20 +563,41 @@ def _similar_rows(conn: Any, project_id: int, mr_id: int, final_type: str, compl
     where_sql = " AND ".join(clauses)
     rows = conn.execute(
         f"""
-        SELECT m.id, m.iid, c.final_type, c.complexity_score, COALESCE(r.regression_probability, c.complexity_score/10.0, 0.0) as regression_probability,
+        SELECT m.id, m.iid, m.title, m.description, c.final_type, c.complexity_score, c.capability_tags_json,
+               COALESCE(r.regression_probability, c.complexity_score/10.0, 0.0) as regression_probability,
+               COALESCE(r.mr_achieved_outcome, '') as mr_achieved_outcome,
                m.updated_at,
-               CASE WHEN c.final_type = ? THEN 0 ELSE 1 END as type_mismatch,
-               ABS(c.complexity_score - ?) as complexity_distance
+               (SELECT GROUP_CONCAT(path, ' ') FROM mr_files f WHERE f.mr_id = m.id) as paths_text
         FROM merge_requests m
         JOIN mr_classifications c ON c.mr_id = m.id
         LEFT JOIN mr_memory_runtime r ON r.mr_id = m.id
         WHERE {where_sql}
-        ORDER BY type_mismatch ASC, complexity_distance ASC, m.updated_at DESC, m.id ASC
-        LIMIT ?
+        ORDER BY m.updated_at DESC, m.id ASC
+        LIMIT 300
         """,
-        (final_type, complexity_score, *params, limit),
+        tuple(params),
     ).fetchall()
-    return [dict(r) for r in rows]
+
+    seed_text = _similarity_text(seed_row)
+    scored: list[dict[str, Any]] = []
+    for raw in rows:
+        item = dict(raw)
+        item["similarity_score"] = round(_text_similarity(seed_text, _similarity_text(item)), 4)
+        item["type_mismatch"] = 0 if str(item.get("final_type") or "") == final_type else 1
+        item["complexity_distance"] = abs(float(item.get("complexity_score") or 0.0) - complexity_score)
+        scored.append(item)
+
+    scored.sort(
+        key=lambda x: (
+            -float(x.get("similarity_score") or 0.0),
+            int(x.get("type_mismatch") or 1),
+            float(x.get("complexity_distance") or 999.0),
+            str(x.get("updated_at") or ""),
+        ),
+        reverse=False,
+    )
+    scored.sort(key=lambda x: -float(x.get("similarity_score") or 0.0))
+    return scored[:limit]
 
 
 def _eligible_runtime_rows(conn: Any, project_id: int, opts: MRBuildOptions) -> list[dict[str, Any]]:
@@ -419,6 +616,7 @@ def _eligible_runtime_rows(conn: Any, project_id: int, opts: MRBuildOptions) -> 
         f"""
         SELECT m.id, m.project_id, m.iid, m.title, m.description, m.web_url, m.updated_at,
                c.final_type, c.complexity_score, c.capability_tags_json,
+               (SELECT GROUP_CONCAT(path, ' ') FROM mr_files mf WHERE mf.mr_id = m.id) as paths_text,
                f.files_changed, f.churn, f.unresolved_thread_count, f.pipeline_failed_count
         FROM merge_requests m
         JOIN mr_classifications c ON c.mr_id = m.id
@@ -464,8 +662,17 @@ def build_runtime_for_project(db: Database, project_id: int, opts: MRBuildOption
                 if row.get("final_type") in {"infra", "perf-security"}:
                     reasons.append("change type historically has elevated operational risk")
 
+                capability_tags = _parse_json_list(row.get("capability_tags_json"))
+                topic_labels = _extract_topic_labels(
+                    str(row.get("final_type") or ""),
+                    capability_tags,
+                    str(row.get("title") or ""),
+                    row.get("description"),
+                )
+                row_for_similarity = dict(row)
                 similar = _similar_rows(
                     conn,
+                    seed_row=row_for_similarity,
                     project_id=project_id,
                     mr_id=int(row["id"]),
                     final_type=str(row.get("final_type") or ""),
@@ -474,8 +681,23 @@ def build_runtime_for_project(db: Database, project_id: int, opts: MRBuildOption
                     data_source=opts.data_source,
                 )
 
+                row_for_outcome = dict(row)
+                row_for_outcome["regression_probability"] = probability
+                row_for_outcome["review_depth_required"] = depth
+                outcome_mode = opts.outcome_mode if opts.outcome_mode in {"template", "semantic-local"} else "template"
+                achieved_outcome, achieved_bullets, outcome_quality = _build_achieved_outcome(
+                    row_for_outcome,
+                    topic_labels,
+                    mode=outcome_mode,
+                )
+
                 assessment = {
                     "mr_outcome": outcome,
+                    "mr_achieved_outcome": achieved_outcome,
+                    "mr_achieved_outcome_bullets": achieved_bullets,
+                    "outcome_quality_score": outcome_quality,
+                    "topic_labels": topic_labels,
+                    "outcome_mode": outcome_mode,
                     "regression_probability": probability,
                     "review_depth_required": depth,
                     "depth_score": round(depth_score, 4),
@@ -513,6 +735,13 @@ def build_runtime_for_project(db: Database, project_id: int, opts: MRBuildOption
                         "project_id": int(row["project_id"]),
                         "mr_iid": int(row["iid"]),
                         "mr_outcome": outcome,
+                        "mr_achieved_outcome": achieved_outcome,
+                        "mr_achieved_outcome_bullets": achieved_bullets,
+                        "outcome_source": "heuristic",
+                        "outcome_mode": outcome_mode,
+                        "outcome_quality_score": outcome_quality,
+                        "topic_labels": topic_labels,
+                        "similarity_strategy": "lexical",
                         "regression_probability": probability,
                         "review_depth_required": depth,
                         "assessment_json": assessment,
@@ -682,6 +911,9 @@ def materialize_project_markdown_from_db(db: Database, project_id: int, opts: Ma
               c.complexity_score,
               r.assessment_json,
               r.similar_mrs_json,
+              r.mr_achieved_outcome,
+              r.mr_achieved_outcome_bullets_json,
+              r.topic_labels_json,
               r.addendum_markdown_path,
               r.context_markdown_path
             FROM mr_memory_runtime r
@@ -702,6 +934,18 @@ def materialize_project_markdown_from_db(db: Database, project_id: int, opts: Ma
                 assessment = json.loads(item.get("assessment_json") or "{}")
             except Exception:
                 assessment = {}
+            if not assessment.get("mr_achieved_outcome"):
+                assessment["mr_achieved_outcome"] = item.get("mr_achieved_outcome")
+            if not assessment.get("mr_achieved_outcome_bullets"):
+                try:
+                    assessment["mr_achieved_outcome_bullets"] = json.loads(item.get("mr_achieved_outcome_bullets_json") or "[]")
+                except Exception:
+                    assessment["mr_achieved_outcome_bullets"] = []
+            if not assessment.get("topic_labels"):
+                try:
+                    assessment["topic_labels"] = json.loads(item.get("topic_labels_json") or "[]")
+                except Exception:
+                    assessment["topic_labels"] = []
             try:
                 similar = json.loads(item.get("similar_mrs_json") or "[]")
             except Exception:

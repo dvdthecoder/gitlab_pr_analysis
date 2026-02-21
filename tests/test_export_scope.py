@@ -77,8 +77,14 @@ def test_export_csv_project_scope(tmp_path) -> None:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     assert rows[0]["project_id"] == "10"
+    assert rows[0]["confidence_band"] in {"low", "medium", "high"}
+    assert rows[0]["needs_review"] in {"0", "1"}
     assert rows[0]["mr_outcome"] == "above_baseline"
+    assert rows[0]["memory_score_version"] == "memory-v1"
+    assert rows[0]["outcome_mode"] == "template"
+    assert rows[0]["outcome_mode"] == "template"
     assert rows[0]["review_depth_required"] == "deep"
+    assert rows[0]["outcome_mode"] == "template"
 
 
 def test_export_jsonl_project_scope(tmp_path) -> None:
@@ -119,6 +125,8 @@ def test_export_memory_csv_project_scope(tmp_path) -> None:
     assert len(rows) == 1
     assert rows[0]["project_id"] == "10"
     assert rows[0]["mr_outcome"] == "above_baseline"
+    assert rows[0]["memory_score_version"] == "memory-v1"
+    assert rows[0]["outcome_mode"] == "template"
 
 
 def test_export_memory_jsonl_project_scope(tmp_path) -> None:
@@ -139,3 +147,4 @@ def test_export_memory_jsonl_project_scope(tmp_path) -> None:
     assert len(rows) == 1
     assert int(rows[0]["project_id"]) == 20
     assert rows[0]["review_depth_required"] == "deep"
+    assert rows[0]["outcome_mode"] == "template"

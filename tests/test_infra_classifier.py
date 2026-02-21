@@ -149,7 +149,9 @@ def test_snyk_signal_maps_to_security_tag() -> None:
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
     assert "security.sca" in result["capability_tags"]
     assert "risk.security" in result["risk_tags"]
-    assert result["classifier_version"] == "v2.3"
+    assert result["classifier_version"] == "v2.8"
+    assert result["confidence_band"] in {"low", "medium", "high"}
+    assert isinstance(result["needs_review"], bool)
 
 
 def test_deploy_pipeline_title_overrides_to_infra_even_without_strong_infra_score() -> None:
@@ -210,7 +212,7 @@ def test_classifier_version_bumped_after_rule_update() -> None:
         pipelines={"failed_count": 0},
     )
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
-    assert result["classifier_version"] == "v2.3"
+    assert result["classifier_version"] == "v2.8"
 
 
 
@@ -293,3 +295,22 @@ def test_bugfix_deploy_with_strong_path_overrides_to_infra() -> None:
     result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
     assert result["base_type"] == "bugfix"
     assert result["final_type"] == "infra"
+
+
+def test_fix_prefix_biases_to_bugfix_over_feature_signals() -> None:
+    extractor = FeatureExtractor(_settings())
+    mr = {
+        "title": "Fix checkout timeout on payment callback",
+        "description": "stabilize behavior for failed retries",
+        "labels": ["feature"],
+    }
+    files = [{"new_path": "src/payments/callback.py", "additions": 12, "deletions": 4}]
+    features = extractor.extract(
+        mr,
+        commits=[],
+        files=files,
+        discussions={"thread_count": 0, "note_count": 0, "unresolved_count": 0},
+        pipelines={"failed_count": 0},
+    )
+    result = classify(mr, files, features, ClassificationConfig(4.0, 1.5))
+    assert result["base_type"] == "bugfix"

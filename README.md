@@ -48,6 +48,7 @@ Optional infra config:
 - `INFRA_KEYWORD_LIST`
 - `INFRA_STRONG_THRESHOLD` (default `4.0`)
 - `INFRA_WEAK_THRESHOLD` (default `1.5`)
+- `CLASSIFICATION_NEEDS_REVIEW_THRESHOLD` (default `0.75`, below this confidence => `needs_review=true`)
 
 Commands:
 
@@ -73,6 +74,7 @@ prtool classify --all-projects --project-start-index 2 --project-count 5
 prtool reclassify --all-projects
 prtool reclassify --all-projects --only-stale
 prtool reclassify --all-projects --force
+prtool reclassify --all-projects --force --qodo-inline --qodo-min-confidence 0.70 --qodo-max-confidence 0.75
 prtool batch run --all-projects
 prtool batch run --group-id your-org/your-group
 prtool batch run --group-id your-org/your-group --concurrency 5 --light-mode
@@ -82,6 +84,7 @@ prtool seed --project-id 999
 prtool view --host 127.0.0.1 --port 8765
 prtool enrich qodo --project-id 123 --mr-limit 50 --concurrency 5
 prtool enrich qodo --project-id 123 --mr-limit 50 --tools describe,review,improve
+prtool enrich qodo-threshold --project-id 123 --min-confidence 0.70 --max-confidence 0.75 --reasons missing_description,low_top2_margin
 prtool enrich qodo --project-id 123 --tools describe,review,improve --candidate-mode stratified --candidate-count 10 --candidate-scope global --candidate-type-balance soft --candidate-data-source production --candidate-preview
 prtool enrich qodo --project-id 123 --tools describe,review,improve --candidate-mode stratified --candidate-count 10 --candidate-scope global --candidate-type-balance soft
 prtool enrich qodo --group-id your-org/your-group --project-start-index 1 --project-count 3
@@ -89,6 +92,8 @@ prtool enrich status --group-id your-org/your-group --format json
 prtool memory baseline-build --project-id 123
 prtool memory baseline-build --all-projects --db-only
 prtool memory mr-build --project-id 123 --mr-limit 50 --only-missing
+prtool memory mr-build --project-id 123 --mr-limit 50 --force --db-only --outcome-mode template
+prtool memory mr-build --project-id 123 --mr-limit 50 --force --db-only --outcome-mode semantic-local
 prtool memory mr-build --all-projects --only-missing --db-only
 prtool memory materialize --project-id 123 --only-missing
 prtool memory materialize --all-projects --only-missing
@@ -98,6 +103,8 @@ prtool memory export --project-id 123 --format both
 prtool memory export --group-id your-org/your-group --format csv
 prtool cleanup --data-source test
 prtool cleanup --data-source test --project-id 12345
+prtool cleanup --artifacts --target outputs --yes
+prtool cleanup --artifacts --target all --yes
 prtool export --format csv
 prtool export --format both --project-id 123
 prtool export --format csv --group-id your-org/your-group
@@ -116,27 +123,59 @@ If `--group-id` (or `GITLAB_GROUP_ID(S)`) is provided, project discovery is scop
 `view` starts a read-only local web screen backed by SQLite.
 `view` supports `group_id` filtering in the UI (resolved via GitLab API to project IDs).
 `enrich qodo` supports a stratified candidate selector (`--candidate-mode stratified`) to pick top-complexity MRs with soft type diversification before running tools.
+`enrich qodo-threshold` selects `needs_review=1` MRs in a configurable confidence band (default `0.70..0.75`), runs Qodo, then automatically reclassifies the same MR IDs.
+`enrich qodo-threshold` filters can be tuned with `--reasons`, `--require-empty-description`, and env vars (`QODO_TRIGGER_MIN_CONF`, `QODO_TRIGGER_MAX_CONF`, `QODO_TRIGGER_REASONS`).
+`reclassify` can run threshold-based Qodo inline via `--qodo-inline` (or env `QODO_INLINE_ENABLED=true`) before classification.
 `--concurrency` controls MR detail fetch workers (default 5).
 `--light-mode` fetches metadata/commits/files only (skips discussions/approvals/pipelines for faster sync).
 Viewer defaults to `production` data-source rows, supports complexity-level filter, and sorts by complexity high-to-low by default.
 `memory baseline-build` computes/refreshes project baseline memory in SQLite and optionally writes baseline markdown.
 `memory mr-build` computes per-MR memory outcomes (`mr_outcome`, `regression_probability`, `review_depth_required`) and stores them in SQLite.
+`memory mr-build` supports `--outcome-mode template|semantic-local` for A/B comparison of achieved-outcome text quality.
 `--db-only` on memory commands persists data to SQLite without writing markdown files.
 `memory materialize` is DB-to-markdown only (no recomputation): it creates baseline/addendum/context files from existing memory rows.
 `memory materialize` defaults to `--only-missing`; use `--force` to overwrite all markdown artifacts.
 `memory export` exports memory tables from SQLite to CSV/JSONL.
 
+## End-to-end architecture (new group/project to persisted outputs)
+
+```mermaid
+flowchart TD
+  A["Start: New Group / Project Scope"] --> B["Configure .env<br/>GITLAB_BASE_URL, TOKEN,<br/>GITLAB_GROUP_ID(S) or PROJECT_ID(S)"]
+  B --> C["Initialize DB<br/>prtool init-db"]
+  C --> D["Discover Projects<br/>projects list/count or --all-projects"]
+
+  D --> E["Sync Ingestion<br/>sync backfill/refresh"]
+  E --> E1["Persist Raw + Core Tables<br/>merge_requests, mr_commits, mr_files,<br/>mr_discussions, mr_pipelines"]
+
+  E1 --> F["Feature Extraction<br/>mr_features"]
+  F --> G["Classification<br/>final_type, confidence, needs_review,<br/>classifier_version, rationale"]
+  G --> G1["Persist mr_classifications"]
+
+  G1 --> H{"needs_review &&<br/>confidence band trigger?"}
+  H -- "No" --> I["Memory Build / Materialize / Export"]
+  H -- "Yes" --> J["Qodo Enrichment (describe)<br/>targeted candidates only"]
+  J --> J1["Persist Qodo Artifacts<br/>mr_qodo_artifacts / mr_qodo_describe"]
+  J1 --> K["Reclassify selected scope<br/>uses Qodo summary fallback when MR description is empty"]
+  K --> L["Recompute confidence + needs_review"]
+  L --> H
+
+  I --> M["Outputs<br/>exports/*, outputs/qodo/*, outputs/memory/*"]
+  M --> N["Viewer / Audit / Reporting"]
+```
+
 ## Classification and memory logic (current behavior)
 
-### Classification (classifier `v2.3`)
+### Classification (classifier `v2.8`)
 
 - Primary labels: `feature`, `bugfix`, `refactor`, `test-only`, `docs-only`, `chore`, `perf-security`, `infra`
 - Base type is inferred from MR title/description/labels and file-path patterns.
 - Infra signals come from extracted features: ticket/keyword/label matches with weak/strong thresholds (`INFRA_WEAK_THRESHOLD`, `INFRA_STRONG_THRESHOLD`).
 - Infra intent override also checks explicit deployment/infra evidence in MR text and paths.
-- Guardrail in `v2.3`: for base types `bugfix` and `chore`, infra intent override is applied only with strong path evidence (prevents noisy title-only overrides).
+- Guardrail in `v2.8`: for base types `bugfix` and `chore`, infra intent override is applied only with strong path evidence (prevents noisy title-only overrides).
+- Reclassification falls back to Qodo `describe` summary as MR description when original description is blank.
 - Final type is `infra` only when strong infra signal or valid intent override is present; otherwise base type is retained.
-- Classifier also stores `capability_tags`, `risk_tags`, `classification_confidence`, and rationale JSON per MR.
+- Classifier also stores `capability_tags`, `risk_tags`, `classification_confidence`, `confidence_band`, `needs_review`, and rationale JSON per MR.
 
 ### Complexity scoring
 
@@ -195,6 +234,12 @@ prtool memory status --project-id 123
 prtool memory export --project-id 123 --format both
 prtool export --project-id 123 --format both
 ```
+
+By default, prtool now writes to repo-root anchored paths regardless of current shell directory:
+
+- exports: `\<repo\>/exports`
+- qodo enrichment artifacts: `\<repo\>/outputs/qodo`
+- memory artifacts: `\<repo\>/outputs/memory`
 
 Default artifact layout when materialized:
 

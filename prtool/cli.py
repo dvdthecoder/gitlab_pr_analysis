@@ -4,7 +4,9 @@ import argparse
 import json
 import re
 import os
+import shutil
 import sys
+from pathlib import Path
 from typing import Any
 
 from prtool.audit import create_audit_sample
@@ -41,6 +43,11 @@ from prtool.memory import (
     get_memory_status,
     materialize_project_markdown_from_db,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_EXPORT_DIR = str(REPO_ROOT / "exports")
+DEFAULT_QODO_OUTPUT_ROOT = str(REPO_ROOT / "outputs" / "qodo")
+DEFAULT_MEMORY_OUTPUT_ROOT = str(REPO_ROOT / "outputs" / "memory")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +93,30 @@ def build_parser() -> argparse.ArgumentParser:
     reclassify_cmd.add_argument("--project-count", type=int)
     reclassify_cmd.add_argument("--only-stale", action=argparse.BooleanOptionalAction, default=True)
     reclassify_cmd.add_argument("--force", action="store_true")
+    reclassify_cmd.add_argument(
+        "--qodo-inline",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("QODO_INLINE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+        help="Run threshold-based Qodo enrichment inline before reclassification",
+    )
+    reclassify_cmd.add_argument("--qodo-min-confidence", type=float, default=float(os.getenv("QODO_TRIGGER_MIN_CONF", "0.70")))
+    reclassify_cmd.add_argument("--qodo-max-confidence", type=float, default=float(os.getenv("QODO_TRIGGER_MAX_CONF", "0.75")))
+    reclassify_cmd.add_argument("--qodo-reasons", default=os.getenv("QODO_TRIGGER_REASONS", "missing_description,low_top2_margin"))
+    reclassify_cmd.add_argument(
+        "--qodo-require-empty-description",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("QODO_REQUIRE_EMPTY_DESCRIPTION", "false").strip().lower() in {"1", "true", "yes", "on"},
+    )
+    reclassify_cmd.add_argument("--qodo-mr-limit", type=int)
+    reclassify_cmd.add_argument("--qodo-tools", default=os.getenv("QODO_INLINE_TOOLS", "describe"))
+    reclassify_cmd.add_argument("--qodo-concurrency", type=int, default=int(os.getenv("QODO_INLINE_CONCURRENCY", "5")))
+    reclassify_cmd.add_argument("--qodo-timeout-sec", type=int, default=int(os.getenv("QODO_INLINE_TIMEOUT_SEC", "180")))
+    reclassify_cmd.add_argument(
+        "--qodo-only-missing",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("QODO_INLINE_ONLY_MISSING", "true").strip().lower() in {"1", "true", "yes", "on"},
+    )
+    reclassify_cmd.add_argument("--qodo-output-root", default=DEFAULT_QODO_OUTPUT_ROOT)
 
     export_cmd = sub.add_parser("export")
     export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
@@ -94,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument("--all-projects", action="store_true")
     export_cmd.add_argument("--project-start-index", type=int, default=1)
     export_cmd.add_argument("--project-count", type=int)
-    export_cmd.add_argument("--out-dir", default="./exports")
+    export_cmd.add_argument("--out-dir", default=DEFAULT_EXPORT_DIR)
 
     audit_cmd = sub.add_parser("audit")
     audit_sub = audit_cmd.add_subparsers(dest="audit_command", required=True)
@@ -153,7 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     qodo_cmd.add_argument("--only-missing", action="store_true", default=True)
     qodo_cmd.add_argument("--force", action="store_true")
     qodo_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
-    qodo_cmd.add_argument("--output-root", default="outputs/qodo")
+    qodo_cmd.add_argument("--output-root", default=DEFAULT_QODO_OUTPUT_ROOT)
     qodo_cmd.add_argument("--compact-max-tokens", type=int, default=3000)
     qodo_cmd.add_argument("--include-mermaid", action="store_true", default=True)
     qodo_cmd.add_argument("--timeout-sec", type=int, default=180)
@@ -165,6 +196,37 @@ def build_parser() -> argparse.ArgumentParser:
     qodo_cmd.add_argument("--candidate-type-balance", choices=["soft", "hard", "none"], default="soft")
     qodo_cmd.add_argument("--candidate-data-source", choices=["production", "test", "all"], default="production")
     qodo_cmd.add_argument("--candidate-preview", action="store_true")
+
+    qodo_threshold_cmd = enrich_sub.add_parser("qodo-threshold")
+    qodo_threshold_cmd.add_argument("--project-id", type=int, action="append")
+    qodo_threshold_cmd.add_argument("--group-id", action="append")
+    qodo_threshold_cmd.add_argument("--all-projects", action="store_true")
+    qodo_threshold_cmd.add_argument("--project-start-index", type=int, default=1)
+    qodo_threshold_cmd.add_argument("--project-count", type=int)
+    qodo_threshold_cmd.add_argument("--min-confidence", type=float, default=float(os.getenv("QODO_TRIGGER_MIN_CONF", "0.70")))
+    qodo_threshold_cmd.add_argument("--max-confidence", type=float, default=float(os.getenv("QODO_TRIGGER_MAX_CONF", "0.75")))
+    qodo_threshold_cmd.add_argument(
+        "--reasons",
+        default=os.getenv("QODO_TRIGGER_REASONS", "missing_description,low_top2_margin"),
+        help="Comma-separated why_needs_review reasons to include; empty means no reason filter",
+    )
+    qodo_threshold_cmd.add_argument(
+        "--require-empty-description",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("QODO_REQUIRE_EMPTY_DESCRIPTION", "false").strip().lower() in {"1", "true", "yes", "on"},
+    )
+    qodo_threshold_cmd.add_argument("--mr-limit", type=int)
+    qodo_threshold_cmd.add_argument("--concurrency", type=int, default=5)
+    qodo_threshold_cmd.add_argument("--only-missing", action="store_true", default=True)
+    qodo_threshold_cmd.add_argument("--force", action="store_true")
+    qodo_threshold_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    qodo_threshold_cmd.add_argument("--output-root", default=DEFAULT_QODO_OUTPUT_ROOT)
+    qodo_threshold_cmd.add_argument("--compact-max-tokens", type=int, default=3000)
+    qodo_threshold_cmd.add_argument("--include-mermaid", action="store_true", default=True)
+    qodo_threshold_cmd.add_argument("--timeout-sec", type=int, default=180)
+    qodo_threshold_cmd.add_argument("--tools", default="describe", help="Comma-separated tools: describe,review,improve")
+    qodo_threshold_cmd.add_argument("--no-progress", action="store_true")
+    qodo_threshold_cmd.add_argument("--dry-run", action="store_true")
 
     status_cmd = enrich_sub.add_parser("status")
     status_cmd.add_argument("--project-id", type=int, action="append")
@@ -194,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline_cmd.add_argument("--all-projects", action="store_true")
     baseline_cmd.add_argument("--project-start-index", type=int, default=1)
     baseline_cmd.add_argument("--project-count", type=int)
-    baseline_cmd.add_argument("--output-root", default="outputs/memory")
+    baseline_cmd.add_argument("--output-root", default=DEFAULT_MEMORY_OUTPUT_ROOT)
     baseline_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
     baseline_cmd.add_argument("--history-window-months", type=int, default=12)
     baseline_cmd.add_argument("--db-only", action="store_true")
@@ -205,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_cmd.add_argument("--all-projects", action="store_true")
     runtime_cmd.add_argument("--project-start-index", type=int, default=1)
     runtime_cmd.add_argument("--project-count", type=int)
-    runtime_cmd.add_argument("--output-root", default="outputs/memory")
+    runtime_cmd.add_argument("--output-root", default=DEFAULT_MEMORY_OUTPUT_ROOT)
     runtime_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
     runtime_cmd.add_argument("--include-similar-limit", type=int, default=5)
     runtime_cmd.add_argument("--mr-limit", type=int)
@@ -213,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_cmd.add_argument("--only-missing", action="store_true", default=True)
     runtime_cmd.add_argument("--force", action="store_true")
     runtime_cmd.add_argument("--db-only", action="store_true")
+    runtime_cmd.add_argument("--outcome-mode", choices=["template", "semantic-local"], default="template")
 
     memory_status_cmd = memory_sub.add_parser("status")
     memory_status_cmd.add_argument("--project-id", type=int, action="append")
@@ -230,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_export_cmd.add_argument("--project-start-index", type=int, default=1)
     memory_export_cmd.add_argument("--project-count", type=int)
     memory_export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
-    memory_export_cmd.add_argument("--out-dir", default="./exports")
+    memory_export_cmd.add_argument("--out-dir", default=DEFAULT_EXPORT_DIR)
 
     memory_materialize_cmd = memory_sub.add_parser("materialize")
     memory_materialize_cmd.add_argument("--project-id", type=int, action="append")
@@ -238,7 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_materialize_cmd.add_argument("--all-projects", action="store_true")
     memory_materialize_cmd.add_argument("--project-start-index", type=int, default=1)
     memory_materialize_cmd.add_argument("--project-count", type=int)
-    memory_materialize_cmd.add_argument("--output-root", default="outputs/memory")
+    memory_materialize_cmd.add_argument("--output-root", default=DEFAULT_MEMORY_OUTPUT_ROOT)
     memory_materialize_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
     memory_materialize_cmd.add_argument("--mr-limit", type=int)
     memory_materialize_cmd.add_argument("--compose", action=argparse.BooleanOptionalAction, default=True)
@@ -248,6 +311,9 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_cmd = sub.add_parser("cleanup")
     cleanup_cmd.add_argument("--data-source", choices=["test", "production"], default="test")
     cleanup_cmd.add_argument("--project-id", type=int)
+    cleanup_cmd.add_argument("--artifacts", action="store_true", help="Delete generated artifact directories")
+    cleanup_cmd.add_argument("--target", choices=["outputs", "exports", "all"], default="outputs")
+    cleanup_cmd.add_argument("--yes", action="store_true", help="Confirm deletion when --artifacts is used")
 
     return parser
 
@@ -276,6 +342,42 @@ def _resolve_concurrency(args: argparse.Namespace) -> int:
         raise ValueError("concurrency must be >= 1")
     return value
 
+
+def _cleanup_artifacts(target: str, yes: bool) -> int:
+    if not yes:
+        print("Error: --yes is required with --artifacts to confirm deletion", file=sys.stderr)
+        return 1
+
+    targets: list[Path]
+    if target == "all":
+        targets = [Path(DEFAULT_EXPORT_DIR), Path(DEFAULT_QODO_OUTPUT_ROOT), Path(DEFAULT_MEMORY_OUTPUT_ROOT)]
+    elif target == "exports":
+        targets = [Path(DEFAULT_EXPORT_DIR)]
+    else:
+        targets = [Path(DEFAULT_QODO_OUTPUT_ROOT), Path(DEFAULT_MEMORY_OUTPUT_ROOT)]
+
+    seen: set[Path] = set()
+    normalized_targets: list[Path] = []
+    for p in targets:
+        p = p.resolve()
+        if p not in seen:
+            seen.add(p)
+            normalized_targets.append(p)
+
+    deleted_paths: list[str] = []
+    for path in normalized_targets:
+        if path.exists():
+            shutil.rmtree(path)
+            deleted_paths.append(str(path))
+        path.mkdir(parents=True, exist_ok=True)
+
+    if deleted_paths:
+        print("Deleted artifact roots:")
+        for path in deleted_paths:
+            print(f"- {path}")
+    else:
+        print("No artifact roots existed; created empty target directories.")
+    return 0
 
 def _collect_group_projects(
     client: GitLabSourceClient,
@@ -436,6 +538,129 @@ def _resolve_export_stem(args: argparse.Namespace) -> str:
     if explicit_projects and len(explicit_projects) == 1:
         return f"mr_classification_project_{int(explicit_projects[0])}"
     return "mr_classification"
+
+
+def _parse_reason_filter(raw: str) -> tuple[str, ...]:
+    parts = [p.strip() for p in (raw or "").split(",") if p.strip()]
+    deduped: list[str] = []
+    for p in parts:
+        if p not in deduped:
+            deduped.append(p)
+    return tuple(deduped)
+
+
+def _needs_review_stats(
+    db: Database,
+    project_ids: list[int],
+    data_source: str,
+) -> dict[str, float]:
+    if not project_ids:
+        return {"total": 0, "needs_review": 0, "needs_review_pct": 0.0}
+    with db.connect() as conn:
+        pid_placeholders = ",".join(["?"] * len(project_ids))
+        params: list[Any] = [int(v) for v in project_ids]
+        source_filter = ""
+        if data_source != "all":
+            source_filter = " AND m.data_source = ?"
+            params.append(data_source)
+        row = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN c.needs_review = 1 THEN 1 ELSE 0 END) AS needs_review
+            FROM mr_classifications c
+            JOIN merge_requests m ON m.id = c.mr_id
+            WHERE m.project_id IN ({pid_placeholders})
+              {source_filter}
+            """,
+            tuple(params),
+        ).fetchone()
+    total = int((row["total"] if row else 0) or 0)
+    needs_review = int((row["needs_review"] if row else 0) or 0)
+    pct = round((100.0 * needs_review / total), 2) if total > 0 else 0.0
+    return {"total": total, "needs_review": needs_review, "needs_review_pct": pct}
+
+
+def _select_qodo_threshold_candidates(
+    db: Database,
+    project_ids: list[int],
+    min_confidence: float,
+    max_confidence: float,
+    reasons: tuple[str, ...],
+    require_empty_description: bool,
+    data_source: str,
+    tools: tuple[str, ...],
+    only_missing: bool,
+    force: bool,
+    mr_limit: int | None,
+) -> list[dict[str, Any]]:
+    if not project_ids:
+        return []
+    with db.connect() as conn:
+        pid_placeholders = ",".join(["?"] * len(project_ids))
+        params: list[Any] = [int(v) for v in project_ids]
+        clauses = [
+            f"m.project_id IN ({pid_placeholders})",
+            "m.web_url IS NOT NULL",
+            "m.web_url != ''",
+            "c.needs_review = 1",
+            "c.classification_confidence >= ?",
+            "c.classification_confidence < ?",
+        ]
+        params.extend([float(min_confidence), float(max_confidence)])
+        if data_source != "all":
+            clauses.append("m.data_source = ?")
+            params.append(data_source)
+        if require_empty_description:
+            clauses.append("TRIM(COALESCE(m.description, '')) = ''")
+        if reasons:
+            r_placeholders = ",".join(["?"] * len(reasons))
+            clauses.append(
+                f"""EXISTS (
+                    SELECT 1
+                    FROM json_each(c.classification_rationale_json, '$.why_needs_review') j
+                    WHERE j.value IN ({r_placeholders})
+                )"""
+            )
+            params.extend(list(reasons))
+        if only_missing and not force:
+            t_placeholders = ",".join(["?"] * len(tools))
+            clauses.append(
+                f"""(
+                    SELECT COUNT(*)
+                    FROM mr_qodo_artifacts qa
+                    WHERE qa.mr_id = m.id AND qa.tool IN ({t_placeholders})
+                ) < {len(tools)}"""
+            )
+            params.extend(list(tools))
+
+        where = " AND ".join(clauses)
+        limit_sql = ""
+        if mr_limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(int(mr_limit))
+        rows = conn.execute(
+            f"""
+            SELECT
+              m.id,
+              m.project_id,
+              m.iid,
+              m.web_url,
+              m.updated_at,
+              c.final_type,
+              c.classification_confidence,
+              c.needs_review,
+              c.classifier_version,
+              TRIM(COALESCE(m.description, '')) = '' AS has_empty_description
+            FROM mr_classifications c
+            JOIN merge_requests m ON m.id = c.mr_id
+            WHERE {where}
+            ORDER BY c.classification_confidence DESC, m.updated_at DESC
+            {limit_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(r) for r in rows]
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     parser = build_parser()
@@ -509,7 +734,69 @@ def main(argv: list[str] | None = None) -> int:
         project_ids = _resolve_classify_project_ids(args, db)
         only_stale = False if args.force else bool(args.only_stale)
         mode = f"only-stale (version={CLASSIFIER_VERSION})" if only_stale else "force-all"
-        print(f"Selected projects ({len(project_ids)}): {project_ids} | mode={mode}")
+        qodo_inline = bool(args.qodo_inline)
+        print(f"Selected projects ({len(project_ids)}): {project_ids} | mode={mode} | qodo_inline={qodo_inline}")
+
+        if qodo_inline:
+            if not (0.0 <= float(args.qodo_min_confidence) < float(args.qodo_max_confidence) <= 1.0):
+                raise ValueError("--qodo-min-confidence and --qodo-max-confidence must satisfy 0 <= min < max <= 1")
+
+            qodo_tools = _parse_tools(args.qodo_tools)
+            if "describe" not in qodo_tools:
+                qodo_tools = ("describe",) + tuple(t for t in qodo_tools if t != "describe")
+            qodo_reasons = _parse_reason_filter(args.qodo_reasons)
+            qodo_opts = EnrichOptions(
+                output_root=args.qodo_output_root,
+                concurrency=args.qodo_concurrency,
+                mr_limit=args.qodo_mr_limit,
+                only_missing=bool(args.qodo_only_missing),
+                force=False,
+                data_source="production",
+                timeout_sec=args.qodo_timeout_sec,
+                compact_max_tokens=3000,
+                include_mermaid=True,
+                tools=qodo_tools,
+                progress=True,
+            )
+            qodo_candidates = _select_qodo_threshold_candidates(
+                db,
+                project_ids=project_ids,
+                min_confidence=float(args.qodo_min_confidence),
+                max_confidence=float(args.qodo_max_confidence),
+                reasons=qodo_reasons,
+                require_empty_description=bool(args.qodo_require_empty_description),
+                data_source="production",
+                tools=qodo_tools,
+                only_missing=bool(args.qodo_only_missing),
+                force=False,
+                mr_limit=args.qodo_mr_limit,
+            )
+            print(
+                f"[qodo-inline] selected={len(qodo_candidates)} min_conf={float(args.qodo_min_confidence):.3f} "
+                f"max_conf={float(args.qodo_max_confidence):.3f} reasons={','.join(qodo_reasons) if qodo_reasons else 'ALL'} "
+                f"require_empty_description={bool(args.qodo_require_empty_description)}"
+            )
+            if qodo_candidates:
+                selected_by_project: dict[int, list[dict[str, Any]]] = {}
+                for row in qodo_candidates:
+                    selected_by_project.setdefault(int(row["project_id"]), []).append(row)
+                q_eligible = 0
+                q_success = 0
+                q_failed = 0
+                q_skipped = 0
+                for project_id in sorted(selected_by_project.keys()):
+                    result = enrich_qodo_project(db, project_id, qodo_opts, candidates=selected_by_project[project_id])
+                    compact_project_qodo(db, project_id, qodo_opts)
+                    q_eligible += int(result["eligible"])
+                    q_success += int(result["success"])
+                    q_failed += int(result["failed"])
+                    q_skipped += int(result["skipped"])
+                print(
+                    f"[qodo-inline] total eligible={q_eligible} success={q_success} failed={q_failed} skipped={q_skipped}"
+                )
+            else:
+                print("[qodo-inline] No eligible candidates; proceeding to reclassification.")
+
         total = 0
         for project_id in project_ids:
             count = classify_project(
@@ -691,6 +978,152 @@ def main(argv: list[str] | None = None) -> int:
         run_viewer(db_path=partial.db_path, host=args.host, port=args.port)
         return 0
 
+    if args.command == "enrich" and args.enrich_command == "qodo-threshold":
+        if not (0.0 <= float(args.min_confidence) < float(args.max_confidence) <= 1.0):
+            raise ValueError("--min-confidence and --max-confidence must satisfy 0 <= min < max <= 1")
+
+        db.init_schema()
+        project_ids = _resolve_project_scope_ids(args)
+        reasons = _parse_reason_filter(args.reasons)
+        tools = _parse_tools(args.tools)
+        if "describe" not in tools:
+            tools = ("describe",) + tuple(t for t in tools if t != "describe")
+
+        opts = EnrichOptions(
+            output_root=args.output_root,
+            concurrency=args.concurrency,
+            mr_limit=args.mr_limit,
+            only_missing=args.only_missing,
+            force=args.force,
+            data_source=args.data_source,
+            timeout_sec=args.timeout_sec,
+            compact_max_tokens=args.compact_max_tokens,
+            include_mermaid=args.include_mermaid,
+            tools=tools,
+            progress=not args.no_progress,
+        )
+
+        before_scope = _needs_review_stats(db, project_ids, data_source=args.data_source)
+        candidates = _select_qodo_threshold_candidates(
+            db,
+            project_ids=project_ids,
+            min_confidence=float(args.min_confidence),
+            max_confidence=float(args.max_confidence),
+            reasons=reasons,
+            require_empty_description=bool(args.require_empty_description),
+            data_source=args.data_source,
+            tools=tools,
+            only_missing=args.only_missing,
+            force=args.force,
+            mr_limit=args.mr_limit,
+        )
+        print(
+            f"Threshold selection: projects={len(project_ids)} min_conf={float(args.min_confidence):.3f} "
+            f"max_conf={float(args.max_confidence):.3f} reasons={','.join(reasons) if reasons else 'ALL'} "
+            f"require_empty_description={bool(args.require_empty_description)} selected={len(candidates)}"
+        )
+
+        if not candidates:
+            print("No eligible candidates in threshold band. Nothing to run.")
+            return 0
+
+        print("project_id\tmr_iid\tmr_id\tconfidence\tfinal_type\tempty_description\tupdated_at\tweb_url")
+        for row in candidates:
+            print(
+                f"{row['project_id']}\t{row['iid']}\t{row['id']}\t{float(row['classification_confidence']):.3f}\t"
+                f"{row.get('final_type') or ''}\t{int(row.get('has_empty_description') or 0)}\t"
+                f"{row.get('updated_at') or ''}\t{row.get('web_url') or ''}"
+            )
+
+        if args.dry_run:
+            print("Dry-run only; skipped enrichment and reclassification.")
+            return 0
+
+        candidate_ids = [int(r["id"]) for r in candidates]
+        before_candidate_state = {int(r["id"]): (float(r["classification_confidence"]), int(r["needs_review"])) for r in candidates}
+
+        selected_by_project: dict[int, list[dict[str, Any]]] = {}
+        candidate_ids_by_project: dict[int, list[int]] = {}
+        for row in candidates:
+            pid = int(row["project_id"])
+            selected_by_project.setdefault(pid, []).append(row)
+            candidate_ids_by_project.setdefault(pid, []).append(int(row["id"]))
+
+        total_eligible = 0
+        total_success = 0
+        total_failed = 0
+        total_skipped = 0
+        for project_id in sorted(selected_by_project.keys()):
+            project_candidates = selected_by_project[project_id]
+            result = enrich_qodo_project(db, project_id, opts, candidates=project_candidates)
+            comp = compact_project_qodo(db, project_id, opts)
+            total_eligible += result["eligible"]
+            total_success += result["success"]
+            total_failed += result["failed"]
+            total_skipped += result["skipped"]
+            print(
+                f"[project {project_id}] tools={','.join(tools)} eligible={result['eligible']} success={result['success']} "
+                f"failed={result['failed']} skipped={result['skipped']} compact={comp['compact_markdown_path']}"
+            )
+
+        reclassified_total = 0
+        for project_id in sorted(candidate_ids_by_project.keys()):
+            count = classify_project(
+                db,
+                partial,
+                project_id,
+                only_stale=False,
+                target_classifier_version=CLASSIFIER_VERSION,
+                mr_ids=candidate_ids_by_project[project_id],
+            )
+            reclassified_total += count
+            print(f"[project {project_id}] Reclassification complete: {count} targeted merge requests processed")
+
+        after_scope = _needs_review_stats(db, project_ids, data_source=args.data_source)
+
+        after_candidate_state: dict[int, tuple[float, int]] = {}
+        with db.connect() as conn:
+            id_placeholders = ",".join(["?"] * len(candidate_ids))
+            rows = conn.execute(
+                f"""
+                SELECT mr_id, classification_confidence, needs_review
+                FROM mr_classifications
+                WHERE mr_id IN ({id_placeholders})
+                """,
+                tuple(candidate_ids),
+            ).fetchall()
+            after_candidate_state = {
+                int(r["mr_id"]): (float(r["classification_confidence"]), int(r["needs_review"]))
+                for r in rows
+            }
+
+        promoted = 0
+        improved = 0
+        total_conf_delta = 0.0
+        for mr_id, (before_conf, before_nr) in before_candidate_state.items():
+            after_conf, after_nr = after_candidate_state.get(mr_id, (before_conf, before_nr))
+            if after_conf > before_conf:
+                improved += 1
+            if before_nr == 1 and after_nr == 0:
+                promoted += 1
+            total_conf_delta += after_conf - before_conf
+        avg_delta = round(total_conf_delta / len(before_candidate_state), 4) if before_candidate_state else 0.0
+
+        print(
+            f"Threshold enrich total: eligible={total_eligible} success={total_success} "
+            f"failed={total_failed} skipped={total_skipped} reclassified={reclassified_total}"
+        )
+        print(
+            f"Candidate impact: promoted_above_threshold={promoted} improved_confidence={improved}/{len(before_candidate_state)} "
+            f"avg_conf_delta={avg_delta:+.4f}"
+        )
+        print(
+            f"Scope needs_review: before={before_scope['needs_review']}/{before_scope['total']} ({before_scope['needs_review_pct']:.2f}%) "
+            f"after={after_scope['needs_review']}/{after_scope['total']} ({after_scope['needs_review_pct']:.2f}%) "
+            f"delta={(after_scope['needs_review_pct'] - before_scope['needs_review_pct']):+.2f}pp"
+        )
+        return 0
+
     if args.command == "enrich" and args.enrich_command == "qodo":
         project_ids = _resolve_project_scope_ids(args)
         tools = _parse_tools(args.tools)
@@ -839,6 +1272,7 @@ def main(argv: list[str] | None = None) -> int:
                     force=args.force,
                     mr_limit=args.mr_limit,
                     db_only=args.db_only,
+                    outcome_mode=args.outcome_mode,
                 ),
             )
             total_eligible += int(result['eligible'])
@@ -929,6 +1363,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "cleanup":
+        if args.artifacts:
+            return _cleanup_artifacts(target=args.target, yes=args.yes)
         db.init_schema()
         with db.connect() as conn:
             deleted = db.delete_merge_requests_by_source(

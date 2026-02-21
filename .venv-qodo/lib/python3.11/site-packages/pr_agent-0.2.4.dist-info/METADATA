@@ -1,0 +1,548 @@
+Metadata-Version: 2.1
+Name: pr-agent
+Version: 0.2.4
+Summary: CodiumAI PR-Agent aims to help efficiently review and handle pull requests, by providing AI feedbacks and suggestions.
+Author-email: CodiumAI <tal.r@codium.ai>
+Maintainer-email: Tal Ridnik <tal.r@codium.ai>, Ori Kotek <ori.k@codium.ai>, Hussam Lawen <hussam.l@codium.ai>
+License: 
+                                         Apache License
+                                   Version 2.0, January 2004
+                                http://www.apache.org/licenses/
+        
+           TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+        
+           1. Definitions.
+        
+              "License" shall mean the terms and conditions for use, reproduction,
+              and distribution as defined by Sections 1 through 9 of this document.
+        
+              "Licensor" shall mean the copyright owner or entity authorized by
+              the copyright owner that is granting the License.
+        
+              "Legal Entity" shall mean the union of the acting entity and all
+              other entities that control, are controlled by, or are under common
+              control with that entity. For the purposes of this definition,
+              "control" means (i) the power, direct or indirect, to cause the
+              direction or management of such entity, whether by contract or
+              otherwise, or (ii) ownership of fifty percent (50%) or more of the
+              outstanding shares, or (iii) beneficial ownership of such entity.
+        
+              "You" (or "Your") shall mean an individual or Legal Entity
+              exercising permissions granted by this License.
+        
+              "Source" form shall mean the preferred form for making modifications,
+              including but not limited to software source code, documentation
+              source, and configuration files.
+        
+              "Object" form shall mean any form resulting from mechanical
+              transformation or translation of a Source form, including but
+              not limited to compiled object code, generated documentation,
+              and conversions to other media types.
+        
+              "Work" shall mean the work of authorship, whether in Source or
+              Object form, made available under the License, as indicated by a
+              copyright notice that is included in or attached to the work
+              (an example is provided in the Appendix below).
+        
+              "Derivative Works" shall mean any work, whether in Source or Object
+              form, that is based on (or derived from) the Work and for which the
+              editorial revisions, annotations, elaborations, or other modifications
+              represent, as a whole, an original work of authorship. For the purposes
+              of this License, Derivative Works shall not include works that remain
+              separable from, or merely link (or bind by name) to the interfaces of,
+              the Work and Derivative Works thereof.
+        
+              "Contribution" shall mean any work of authorship, including
+              the original version of the Work and any modifications or additions
+              to that Work or Derivative Works thereof, that is intentionally
+              submitted to Licensor for inclusion in the Work by the copyright owner
+              or by an individual or Legal Entity authorized to submit on behalf of
+              the copyright owner. For the purposes of this definition, "submitted"
+              means any form of electronic, verbal, or written communication sent
+              to the Licensor or its representatives, including but not limited to
+              communication on electronic mailing lists, source code control systems,
+              and issue tracking systems that are managed by, or on behalf of, the
+              Licensor for the purpose of discussing and improving the Work, but
+              excluding communication that is conspicuously marked or otherwise
+              designated in writing by the copyright owner as "Not a Contribution."
+        
+              "Contributor" shall mean Licensor and any individual or Legal Entity
+              on behalf of whom a Contribution has been received by Licensor and
+              subsequently incorporated within the Work.
+        
+           2. Grant of Copyright License. Subject to the terms and conditions of
+              this License, each Contributor hereby grants to You a perpetual,
+              worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+              copyright license to reproduce, prepare Derivative Works of,
+              publicly display, publicly perform, sublicense, and distribute the
+              Work and such Derivative Works in Source or Object form.
+        
+           3. Grant of Patent License. Subject to the terms and conditions of
+              this License, each Contributor hereby grants to You a perpetual,
+              worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+              (except as stated in this section) patent license to make, have made,
+              use, offer to sell, sell, import, and otherwise transfer the Work,
+              where such license applies only to those patent claims licensable
+              by such Contributor that are necessarily infringed by their
+              Contribution(s) alone or by combination of their Contribution(s)
+              with the Work to which such Contribution(s) was submitted. If You
+              institute patent litigation against any entity (including a
+              cross-claim or counterclaim in a lawsuit) alleging that the Work
+              or a Contribution incorporated within the Work constitutes direct
+              or contributory patent infringement, then any patent licenses
+              granted to You under this License for that Work shall terminate
+              as of the date such litigation is filed.
+        
+           4. Redistribution. You may reproduce and distribute copies of the
+              Work or Derivative Works thereof in any medium, with or without
+              modifications, and in Source or Object form, provided that You
+              meet the following conditions:
+        
+              (a) You must give any other recipients of the Work or
+                  Derivative Works a copy of this License; and
+        
+              (b) You must cause any modified files to carry prominent notices
+                  stating that You changed the files; and
+        
+              (c) You must retain, in the Source form of any Derivative Works
+                  that You distribute, all copyright, patent, trademark, and
+                  attribution notices from the Source form of the Work,
+                  excluding those notices that do not pertain to any part of
+                  the Derivative Works; and
+        
+              (d) If the Work includes a "NOTICE" text file as part of its
+                  distribution, then any Derivative Works that You distribute must
+                  include a readable copy of the attribution notices contained
+                  within such NOTICE file, excluding those notices that do not
+                  pertain to any part of the Derivative Works, in at least one
+                  of the following places: within a NOTICE text file distributed
+                  as part of the Derivative Works; within the Source form or
+                  documentation, if provided along with the Derivative Works; or,
+                  within a display generated by the Derivative Works, if and
+                  wherever such third-party notices normally appear. The contents
+                  of the NOTICE file are for informational purposes only and
+                  do not modify the License. You may add Your own attribution
+                  notices within Derivative Works that You distribute, alongside
+                  or as an addendum to the NOTICE text from the Work, provided
+                  that such additional attribution notices cannot be construed
+                  as modifying the License.
+        
+              You may add Your own copyright statement to Your modifications and
+              may provide additional or different license terms and conditions
+              for use, reproduction, or distribution of Your modifications, or
+              for any such Derivative Works as a whole, provided Your use,
+              reproduction, and distribution of the Work otherwise complies with
+              the conditions stated in this License.
+        
+           5. Submission of Contributions. Unless You explicitly state otherwise,
+              any Contribution intentionally submitted for inclusion in the Work
+              by You to the Licensor shall be under the terms and conditions of
+              this License, without any additional terms or conditions.
+              Notwithstanding the above, nothing herein shall supersede or modify
+              the terms of any separate license agreement you may have executed
+              with Licensor regarding such Contributions.
+        
+           6. Trademarks. This License does not grant permission to use the trade
+              names, trademarks, service marks, or product names of the Licensor,
+              except as required for reasonable and customary use in describing the
+              origin of the Work and reproducing the content of the NOTICE file.
+        
+           7. Disclaimer of Warranty. Unless required by applicable law or
+              agreed to in writing, Licensor provides the Work (and each
+              Contributor provides its Contributions) on an "AS IS" BASIS,
+              WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+              implied, including, without limitation, any warranties or conditions
+              of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+              PARTICULAR PURPOSE. You are solely responsible for determining the
+              appropriateness of using or redistributing the Work and assume any
+              risks associated with Your exercise of permissions under this License.
+        
+           8. Limitation of Liability. In no event and under no legal theory,
+              whether in tort (including negligence), contract, or otherwise,
+              unless required by applicable law (such as deliberate and grossly
+              negligent acts) or agreed to in writing, shall any Contributor be
+              liable to You for damages, including any direct, indirect, special,
+              incidental, or consequential damages of any character arising as a
+              result of this License or out of the use or inability to use the
+              Work (including but not limited to damages for loss of goodwill,
+              work stoppage, computer failure or malfunction, or any and all
+              other commercial damages or losses), even if such Contributor
+              has been advised of the possibility of such damages.
+        
+           9. Accepting Warranty or Additional Liability. While redistributing
+              the Work or Derivative Works thereof, You may choose to offer,
+              and charge a fee for, acceptance of support, warranty, indemnity,
+              or other liability obligations and/or rights consistent with this
+              License. However, in accepting such obligations, You may act only
+              on Your own behalf and on Your sole responsibility, not on behalf
+              of any other Contributor, and only if You agree to indemnify,
+              defend, and hold each Contributor harmless for any liability
+              incurred by, or claims asserted against, such Contributor by reason
+              of your accepting any such warranty or additional liability.
+        
+           END OF TERMS AND CONDITIONS
+        
+           APPENDIX: How to apply the Apache License to your work.
+        
+              To apply the Apache License to your work, attach the following
+              boilerplate notice, with the fields enclosed by brackets "[]"
+              replaced with your own identifying information. (Don't include
+              the brackets!)  The text should be enclosed in the appropriate
+              comment syntax for the file format. We also recommend that a
+              file or class name and description of purpose be included on the
+              same "printed page" as the copyright notice for easier
+              identification within third-party archives.
+        
+           Copyright [2023] [Codium ltd]
+        
+           Licensed under the Apache License, Version 2.0 (the "License");
+           you may not use this file except in compliance with the License.
+           You may obtain a copy of the License at
+        
+               http://www.apache.org/licenses/LICENSE-2.0
+        
+           Unless required by applicable law or agreed to in writing, software
+           distributed under the License is distributed on an "AS IS" BASIS,
+           WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+           See the License for the specific language governing permissions and
+           limitations under the License.
+Project-URL: Homepage, https://github.com/Codium-ai/pr-agent
+Project-URL: Documentation, https://pr-agent-docs.codium.ai/
+Keywords: AI,Agents,Pull Request,Automation,Code Review
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: aiohttp ==3.9.4
+Requires-Dist: anthropic[vertex] ==0.21.3
+Requires-Dist: atlassian-python-api ==3.41.4
+Requires-Dist: azure-devops ==7.1.0b3
+Requires-Dist: azure-identity ==1.15.0
+Requires-Dist: boto3 ==1.33.6
+Requires-Dist: dynaconf ==3.2.4
+Requires-Dist: fastapi ==0.111.0
+Requires-Dist: GitPython ==3.1.41
+Requires-Dist: google-cloud-aiplatform ==1.38.0
+Requires-Dist: google-cloud-storage ==2.10.0
+Requires-Dist: Jinja2 ==3.1.2
+Requires-Dist: litellm ==1.43.13
+Requires-Dist: loguru ==0.7.2
+Requires-Dist: msrest ==0.7.1
+Requires-Dist: openai ==1.40.6
+Requires-Dist: pytest ==7.4.0
+Requires-Dist: PyGithub ==1.59.*
+Requires-Dist: PyYAML ==6.0.1
+Requires-Dist: python-gitlab ==3.15.0
+Requires-Dist: retry ==0.9.2
+Requires-Dist: starlette-context ==0.3.6
+Requires-Dist: tiktoken ==0.7.0
+Requires-Dist: ujson ==5.8.0
+Requires-Dist: uvicorn ==0.22.0
+Requires-Dist: tenacity ==8.2.3
+Requires-Dist: gunicorn ==22.0.0
+Requires-Dist: pytest-cov ==5.0.0
+Requires-Dist: pydantic ==2.8.2
+
+<div align="center">
+
+<div align="center">
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://codium.ai/images/pr_agent/logo-dark.png" width="330">
+  <source media="(prefers-color-scheme: light)" srcset="https://codium.ai/images/pr_agent/logo-light.png" width="330">
+  <img src="https://codium.ai/images/pr_agent/logo-light.png" alt="logo" width="330">
+
+</picture>
+<br/>
+CodiumAI PR-Agent aims to help efficiently review and handle pull requests, by providing AI feedback and suggestions
+</div>
+
+[![GitHub license](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/Codium-ai/pr-agent/blob/main/LICENSE)
+[![Static Badge](https://img.shields.io/badge/Chrome-Extension-violet)](https://chromewebstore.google.com/detail/pr-agent-chrome-extension/ephlnjeghhogofkifjloamocljapahnl)
+[![Static Badge](https://img.shields.io/badge/Code-Benchmark-blue)](https://pr-agent-docs.codium.ai/finetuning_benchmark/)
+[![Discord](https://badgen.net/badge/icon/discord?icon=discord&label&color=purple)](https://discord.com/channels/1057273017547378788/1126104260430528613)
+[![Twitter](https://img.shields.io/twitter/follow/codiumai)](https://twitter.com/codiumai)
+[![Cheat Sheet](https://img.shields.io/badge/Cheat-Sheet-red)](https://www.codium.ai/images/pr_agent/cheat_sheet.pdf)
+    <a href="https://github.com/Codium-ai/pr-agent/commits/main">
+    <img alt="GitHub" src="https://img.shields.io/github/last-commit/Codium-ai/pr-agent/main?style=for-the-badge" height="20">
+    </a>
+</div>
+
+### [Documentation](https://pr-agent-docs.codium.ai/)
+- See the [Installation Guide](https://pr-agent-docs.codium.ai/installation/) for instructions on installing PR-Agent on different platforms.
+
+- See the [Usage Guide](https://pr-agent-docs.codium.ai/usage-guide/) for instructions on running PR-Agent tools via different interfaces, such as CLI, PR Comments, or by automatically triggering them when a new PR is opened.
+
+- See the [Tools Guide](https://pr-agent-docs.codium.ai/tools/) for a detailed description of the different tools, and the available configurations for each tool.
+
+
+## Table of Contents
+- [News and Updates](#news-and-updates)
+- [Overview](#overview)
+- [Example results](#example-results)
+- [Try it now](#try-it-now)
+- [PR-Agent Pro 💎](https://pr-agent-docs.codium.ai/overview/pr_agent_pro/)
+- [How it works](#how-it-works)
+- [Why use PR-Agent?](#why-use-pr-agent)
+  
+## News and Updates
+
+### August 26, 2024
+
+New version of [PR Agent Chrom Extension](https://chromewebstore.google.com/detail/pr-agent-chrome-extension/ephlnjeghhogofkifjloamocljapahnl) was released, with full support of context-aware **PR Chat**. This novel feature is free to use for any open-source repository. See more details in [here](https://pr-agent-docs.codium.ai/chrome-extension/#pr-chat).
+
+<kbd><img src="https://www.codium.ai/images/pr_agent/pr_chat_1.png" width="768"></kbd>
+
+<kbd><img src="https://www.codium.ai/images/pr_agent/pr_chat_2.png" width="768"></kbd>
+
+
+### August 11, 2024
+Increased PR context size for improved results, and enabled [asymmetric context](https://github.com/Codium-ai/pr-agent/pull/1114/files#diff-9290a3ad9a86690b31f0450b77acd37ef1914b41fabc8a08682d4da433a77f90R69-R70)
+
+### August 10, 2024
+Added support for [Azure devops pipeline](https://pr-agent-docs.codium.ai/installation/azure/) - you can now easily run PR-Agent as an Azure devops pipeline, without needing to set up your own server.
+
+
+### August 5, 2024
+Added support for [GitLab pipeline](https://pr-agent-docs.codium.ai/installation/gitlab/#run-as-a-gitlab-pipeline) - you can now run easily PR-Agent as a GitLab pipeline, without needing to set up your own server.
+
+### July 28, 2024
+
+(1) improved support for bitbucket server - [auto commands](https://github.com/Codium-ai/pr-agent/pull/1059) and [direct links](https://github.com/Codium-ai/pr-agent/pull/1061)
+
+(2) custom models are now [supported](https://pr-agent-docs.codium.ai/usage-guide/changing_a_model/#custom-models)
+
+
+
+## Overview
+<div style="text-align:left;">
+
+Supported commands per platform:
+
+|       |                                                                                                         | GitHub             | Gitlab             | Bitbucket          | Azure DevOps |
+|-------|---------------------------------------------------------------------------------------------------------|:--------------------:|:--------------------:|:--------------------:|:------------:|
+| TOOLS | Review                                                                                                  | ✅ | ✅ | ✅ |      ✅       |
+|       | ⮑ Incremental                                                                                           | ✅ |                    |                    |              |
+|       | ⮑ [SOC2 Compliance](https://pr-agent-docs.codium.ai/tools/review/#soc2-ticket-compliance) 💎            | ✅ | ✅ | ✅ |              |
+|       | Describe                                                                                                | ✅ | ✅ | ✅ |      ✅       |
+|       | ⮑ [Inline File Summary](https://pr-agent-docs.codium.ai/tools/describe#inline-file-summary) 💎          | ✅ |                    |                    |              |
+|       | Improve                                                                                                 | ✅ | ✅ | ✅ |      ✅       |
+|       | ⮑ Extended                                                                                              | ✅ | ✅ | ✅ |      ✅       |
+|       | Ask                                                                                                     | ✅ | ✅ | ✅ |      ✅       |
+|       | ⮑ [Ask on code lines](https://pr-agent-docs.codium.ai/tools/ask#ask-lines)                              | ✅ | ✅ |                    |              |
+|       | [Custom Prompt](https://pr-agent-docs.codium.ai/tools/custom_prompt/) 💎                                | ✅ | ✅ | ✅ |              |
+|       | [Test](https://pr-agent-docs.codium.ai/tools/test/) 💎                                                  | ✅ | ✅ |                    |              |
+|       | Reflect and Review                                                                                      | ✅ | ✅ | ✅ |      ✅       |
+|       | Update CHANGELOG.md                                                                                     | ✅ | ✅ | ✅ |      ✅       |
+|       | Find Similar Issue                                                                                      | ✅ |                    |                    |              |
+|       | [Add PR Documentation](https://pr-agent-docs.codium.ai/tools/documentation/) 💎                         | ✅ | ✅ |                   |              |
+|       | [Custom Labels](https://pr-agent-docs.codium.ai/tools/custom_labels/) 💎                                | ✅ | ✅ |                    |              |
+|       | [Analyze](https://pr-agent-docs.codium.ai/tools/analyze/) 💎                                            | ✅ | ✅ |                    |              |
+|       | [CI Feedback](https://pr-agent-docs.codium.ai/tools/ci_feedback/) 💎                                    | ✅ |                    |                    |              |
+|       | [Similar Code](https://pr-agent-docs.codium.ai/tools/similar_code/) 💎                                  | ✅ |                    |                    |              |
+|       |                                                                                                         |                    |                    |                    |              |
+| USAGE | CLI                                                                                                     | ✅ | ✅ | ✅ |      ✅       |
+|       | App / webhook                                                                                           | ✅ | ✅ | ✅ |      ✅       |
+|       | Tagging bot                                                                                             | ✅ |                    |                    |              |
+|       | Actions                                                                                                 | ✅ |✅| ✅ |✅|
+|       |                                                                                                         |                    |                    |                    |              |
+| CORE  | PR compression                                                                                          | ✅ | ✅ | ✅ |      ✅       |
+|       | Repo language prioritization                                                                            | ✅ | ✅ | ✅ |      ✅       |
+|       | Adaptive and token-aware file patch fitting                                                             | ✅ | ✅ | ✅ |      ✅       |
+|       | Multiple models support                                                                                 | ✅ | ✅ | ✅ |      ✅       |
+|       | [Static code analysis](https://pr-agent-docs.codium.ai/core-abilities/#static-code-analysis) 💎         | ✅ | ✅ | ✅ |              |
+|       | [Global and wiki configurations](https://pr-agent-docs.codium.ai/usage-guide/configuration_options/) 💎 | ✅ | ✅ | ✅ |              |
+|       | [PR interactive actions](https://www.codium.ai/images/pr_agent/pr-actions.mp4) 💎                       | ✅ |        ✅           |                    |              |
+- 💎 means this feature is available only in [PR-Agent Pro](https://www.codium.ai/pricing/)
+
+[//]: # (- Support for additional git providers is described in [here]&#40;./docs/Full_environments.md&#41;)
+___
+
+‣ **Auto Description ([`/describe`](https://pr-agent-docs.codium.ai/tools/describe/))**: Automatically generating PR description - title, type, summary, code walkthrough and labels.
+\
+‣ **Auto Review ([`/review`](https://pr-agent-docs.codium.ai/tools/review/))**: Adjustable feedback about the PR, possible issues, security concerns, review effort and more.
+\
+‣ **Code Suggestions ([`/improve`](https://pr-agent-docs.codium.ai/tools/improve/))**: Code suggestions for improving the PR.
+\
+‣ **Question Answering ([`/ask ...`](https://pr-agent-docs.codium.ai/tools/ask/))**: Answering free-text questions about the PR.
+\
+‣ **Update Changelog ([`/update_changelog`](https://pr-agent-docs.codium.ai/tools/update_changelog/))**: Automatically updating the CHANGELOG.md file with the PR changes.
+\
+‣ **Find Similar Issue ([`/similar_issue`](https://pr-agent-docs.codium.ai/tools/similar_issues/))**: Automatically retrieves and presents similar issues.
+\
+‣ **Add Documentation 💎  ([`/add_docs`](https://pr-agent-docs.codium.ai/tools/documentation/))**: Generates documentation to methods/functions/classes that changed in the PR.
+\
+‣ **Generate Custom Labels 💎 ([`/generate_labels`](https://pr-agent-docs.codium.ai/tools/custom_labels/))**: Generates custom labels for the PR, based on specific guidelines defined by the user.
+\
+‣ **Analyze 💎 ([`/analyze`](https://pr-agent-docs.codium.ai/tools/analyze/))**: Identify code components that changed in the PR, and enables to interactively generate tests, docs, and code suggestions for each component.
+\
+‣ **Custom Prompt 💎 ([`/custom_prompt`](https://pr-agent-docs.codium.ai/tools/custom_prompt/))**: Automatically generates custom suggestions for improving the PR code, based on specific guidelines defined by the user.
+\
+‣ **Generate Tests 💎 ([`/test component_name`](https://pr-agent-docs.codium.ai/tools/test/))**: Generates unit tests for a selected component, based on the PR code changes.
+\
+‣ **CI Feedback 💎 ([`/checks ci_job`](https://pr-agent-docs.codium.ai/tools/ci_feedback/))**: Automatically generates feedback and analysis for a failed CI job.
+\
+‣ **Similar Code 💎 ([`/find_similar_component`](https://pr-agent-docs.codium.ai/tools/similar_code/))**: Retrieves the most similar code components from inside the organization's codebase, or from open-source code.
+___
+
+## Example results
+</div>
+<h4><a href="https://github.com/Codium-ai/pr-agent/pull/530">/describe</a></h4>
+<div align="center">
+<p float="center">
+<img src="https://www.codium.ai/images/pr_agent/describe_new_short_main.png" width="512">
+</p>
+</div>
+<hr>
+
+<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099151">/review</a></h4>
+<div align="center">
+<p float="center">
+<kbd>
+<img src="https://www.codium.ai/images/pr_agent/review_new_short_main.png" width="512">
+</kbd>
+</p>
+</div>
+<hr>
+
+<h4><a href="https://github.com/Codium-ai/pr-agent/pull/732#issuecomment-1975099159">/improve</a></h4>
+<div align="center">
+<p float="center">
+<kbd>
+<img src="https://www.codium.ai/images/pr_agent/improve_new_short_main.png" width="512">
+</kbd>
+</p>
+</div>
+<hr>
+
+<h4><a href="https://github.com/Codium-ai/pr-agent/pull/530">/generate_labels</a></h4>
+<div align="center">
+<p float="center">
+<kbd><img src="https://www.codium.ai/images/pr_agent/geneare_custom_labels_main_short.png" width="300"></kbd>
+</p>
+</div>
+
+[//]: # (<h4><a href="https://github.com/Codium-ai/pr-agent/pull/78#issuecomment-1639739496">/reflect_and_review:</a></h4>)
+
+[//]: # (<div align="center">)
+
+[//]: # (<p float="center">)
+
+[//]: # (<img src="https://www.codium.ai/images/reflect_and_review.gif" width="800">)
+
+[//]: # (</p>)
+
+[//]: # (</div>)
+
+[//]: # (<h4><a href="https://github.com/Codium-ai/pr-agent/pull/229#issuecomment-1695020538">/ask:</a></h4>)
+
+[//]: # (<div align="center">)
+
+[//]: # (<p float="center">)
+
+[//]: # (<img src="https://www.codium.ai/images/ask-2.gif" width="800">)
+
+[//]: # (</p>)
+
+[//]: # (</div>)
+
+[//]: # (<h4><a href="https://github.com/Codium-ai/pr-agent/pull/229#issuecomment-1695024952">/improve:</a></h4>)
+
+[//]: # (<div align="center">)
+
+[//]: # (<p float="center">)
+
+[//]: # (<img src="https://www.codium.ai/images/improve-2.gif" width="800">)
+
+[//]: # (</p>)
+
+[//]: # (</div>)
+<div align="left">
+
+
+</div>
+<hr>
+
+
+## Try it now
+
+Try the GPT-4 powered PR-Agent instantly on _your public GitHub repository_. Just mention `@CodiumAI-Agent` and add the desired command in any PR comment. The agent will generate a response based on your command.
+For example, add a comment to any pull request with the following text:
+```
+@CodiumAI-Agent /review
+```
+and the agent will respond with a review of your PR.
+
+Note that this is a promotional bot, suitable only for initial experimentation.
+It does not have 'edit' access to your repo, for example, so it cannot update the PR description or add labels (`@CodiumAI-Agent /describe` will publish PR description as a comment). In addition, the bot cannot be used on private repositories, as it does not have access to the files there.
+
+
+![Review generation process](https://www.codium.ai/images/demo-2.gif)
+
+
+To set up your own PR-Agent, see the [Installation](https://pr-agent-docs.codium.ai/installation/) section below.
+Note that when you set your own PR-Agent or use CodiumAI hosted PR-Agent, there is no need to mention `@CodiumAI-Agent ...`. Instead, directly start with the command, e.g., `/ask ...`.
+
+---
+
+
+## PR-Agent Pro 💎
+[PR-Agent Pro](https://www.codium.ai/pricing/) is a hosted version of PR-Agent, provided by CodiumAI. It is available for a monthly fee, and provides the following benefits:
+1. **Fully managed** - We take care of everything for you - hosting, models, regular updates, and more. Installation is as simple as signing up and adding the PR-Agent app to your GitHub\GitLab\BitBucket repo.
+2. **Improved privacy** - No data will be stored or used to train models. PR-Agent Pro will employ zero data retention, and will use an OpenAI account with zero data retention.
+3. **Improved support** - PR-Agent Pro users will receive priority support, and will be able to request new features and capabilities.
+4. **Extra features** -In addition to the benefits listed above, PR-Agent Pro will emphasize more customization, and the usage of static code analysis, in addition to LLM logic, to improve results. 
+See [here](https://pr-agent-docs.codium.ai/#pr-agent-pro) for a list of features available in PR-Agent Pro.
+
+
+
+## How it works
+
+The following diagram illustrates PR-Agent tools and their flow:
+
+![PR-Agent Tools](https://codium.ai/images/pr_agent/diagram-v0.9.png)
+
+Check out the [PR Compression strategy](https://pr-agent-docs.codium.ai/core-abilities/#pr-compression-strategy) page for more details on how we convert a code diff to a manageable LLM prompt
+
+## Why use PR-Agent?
+
+A reasonable question that can be asked is: `"Why use PR-Agent? What makes it stand out from existing tools?"`
+
+Here are some advantages of PR-Agent:
+
+- We emphasize **real-life practical usage**. Each tool (review, improve, ask, ...) has a single GPT-4 call, no more. We feel that this is critical for realistic team usage - obtaining an answer quickly (~30 seconds) and affordably.
+- Our [PR Compression strategy](https://pr-agent-docs.codium.ai/core-abilities/#pr-compression-strategy)  is a core ability that enables to effectively tackle both short and long PRs.
+- Our JSON prompting strategy enables to have **modular, customizable tools**. For example, the '/review' tool categories can be controlled via the [configuration](pr_agent/settings/configuration.toml) file. Adding additional categories is easy and accessible.
+- We support **multiple git providers** (GitHub, Gitlab, Bitbucket), **multiple ways** to use the tool (CLI, GitHub Action, GitHub App, Docker, ...), and **multiple models** (GPT-4, GPT-3.5, Anthropic, Cohere, Llama2).
+
+
+## Data privacy
+
+### Self-hosted PR-Agent
+
+- If you host PR-Agent with your OpenAI API key, it is between you and OpenAI. You can read their API data privacy policy here:
+https://openai.com/enterprise-privacy
+
+### CodiumAI-hosted PR-Agent Pro 💎
+
+- When using PR-Agent Pro 💎, hosted by CodiumAI, we will not store any of your data, nor will we use it for training. You will also benefit from an OpenAI account with zero data retention.
+
+- For certain clients, CodiumAI-hosted PR-Agent Pro will use CodiumAI’s proprietary models — if this is the case, you will be notified.
+
+- No passive collection of Code and Pull Requests’ data — PR-Agent will be active only when you invoke it, and it will then extract and analyze only data relevant to the executed command and queried pull request.
+
+### PR-Agent Chrome extension
+
+- The [PR-Agent Chrome extension](https://chromewebstore.google.com/detail/pr-agent-chrome-extension/ephlnjeghhogofkifjloamocljapahnl) serves solely to modify the visual appearance of a GitHub PR screen. It does not transmit any user's repo or pull request code. Code is only sent for processing when a user submits a GitHub comment that activates a PR-Agent tool, in accordance with the standard privacy policy of PR-Agent.
+
+## Links
+
+[![Join our Discord community](https://raw.githubusercontent.com/Codium-ai/codiumai-vscode-release/main/media/docs/Joincommunity.png)](https://discord.gg/kG35uSHDBc)
+
+- Discord community: https://discord.gg/kG35uSHDBc
+- CodiumAI site: https://codium.ai
+- Blog: https://www.codium.ai/blog/
+- Troubleshooting: https://www.codium.ai/blog/technical-faq-and-troubleshooting/
+- Support: support@codium.ai
