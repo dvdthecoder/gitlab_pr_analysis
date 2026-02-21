@@ -5,9 +5,19 @@ Python CLI for GitLab Merge Request analysis with SQLite storage, infra-aware ty
 ## Quick start
 
 ```bash
+# prtool runtime
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+
+# qodo/pr-agent runtime (kept separate to avoid dependency conflicts)
+python3 -m venv .venv-qodo
+source .venv-qodo/bin/activate
+pip install -r requirements-enrich.txt
+deactivate
+
+# initialize DB with prtool runtime
+source .venv/bin/activate
 prtool init-db
 ```
 
@@ -24,7 +34,7 @@ Set environment variables (this is where PAT goes):
 - `GITLAB_PROJECT_ID` (single project) or `GITLAB_PROJECT_IDS` (comma-separated multiple projects)
 - `GITLAB_GROUP_ID` / `GITLAB_GROUP_IDS` (optional: restrict discovery to specific group(s))
 - `DB_PATH` (default `./pr_analysis.db`)
-- `QODO_DESCRIBE_CMD` (required for `enrich qodo`, must include `{mr_url}`; use `--config.publish_output=false` for read-only mode)
+- `QODO_DESCRIBE_CMD` (required for `enrich qodo`/inline qodo; must include `{mr_url}`; use `--config.publish_output=false` for read-only mode)
 - `QODO_REVIEW_CMD` / `QODO_IMPROVE_CMD` (optional overrides for multi-tool runs)
 
 Example:
@@ -34,10 +44,10 @@ export GITLAB_BASE_URL="https://gitlab.com"
 export GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxx"
 export GITLAB_PROJECT_IDS="12345678,23456789,34567890"
 export GITLAB_GROUP_ID="your-org/your-group"
-export QODO_DESCRIBE_CMD="python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
+export QODO_DESCRIBE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
 # Optional overrides:
-# export QODO_REVIEW_CMD="python -m pr_agent.cli --pr_url={mr_url} review --config.publish_output=false --config.verbosity_level=2"
-# export QODO_IMPROVE_CMD="python -m pr_agent.cli --pr_url={mr_url} improve --config.publish_output=false --config.verbosity_level=2"
+# export QODO_REVIEW_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} review --config.publish_output=false --config.verbosity_level=2"
+# export QODO_IMPROVE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} improve --config.publish_output=false --config.verbosity_level=2"
 export DB_PATH="./pr_analysis.db"
 ```
 
@@ -49,6 +59,91 @@ Optional infra config:
 - `INFRA_STRONG_THRESHOLD` (default `4.0`)
 - `INFRA_WEAK_THRESHOLD` (default `1.5`)
 - `CLASSIFICATION_NEEDS_REVIEW_THRESHOLD` (default `0.75`, below this confidence => `needs_review=true`)
+- `QODO_INLINE_ENABLED` (default `false`; run threshold-Qodo inline during `reclassify`)
+- `QODO_TRIGGER_MIN_CONF` / `QODO_TRIGGER_MAX_CONF` (defaults `0.70` / `0.75`)
+- `QODO_TRIGGER_REASONS` (default `missing_description,low_top2_margin`)
+- `QODO_REQUIRE_EMPTY_DESCRIPTION` (default `false`)
+- `QODO_INLINE_CONCURRENCY` (default `5`)
+- `QODO_INLINE_TIMEOUT_SEC` (default `180`)
+
+## Recommended runtime sequence
+
+```bash
+# load .env once per shell
+set -a
+source .env
+set +a
+
+# run prtool using .venv
+source .venv/bin/activate
+
+# classifier-only flow
+prtool reclassify --all-projects --force
+
+# classifier + inline qodo flow
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+If you hit qodo timeouts, increase timeout and reduce concurrency:
+
+```bash
+export QODO_INLINE_TIMEOUT_SEC=420
+export QODO_INLINE_CONCURRENCY=3
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+## Troubleshooting
+
+### Qodo fails with `ModuleNotFoundError: No module named 'pr_agent'`
+
+Symptom in `mr_qodo_runs.stderr_excerpt`:
+
+```text
+Error while finding module specification for 'pr_agent.cli'
+```
+
+Fix:
+
+```bash
+# ensure qodo runtime exists and has dependencies
+python3 -m venv .venv-qodo
+source .venv-qodo/bin/activate
+pip install -r requirements-enrich.txt
+deactivate
+
+# ensure .env uses qodo runtime interpreter
+export QODO_DESCRIBE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
+```
+
+Also clear stale shell vars before reloading `.env`:
+
+```bash
+unset QODO_DESCRIBE_CMD QODO_REVIEW_CMD QODO_IMPROVE_CMD
+set -a; source .env; set +a
+```
+
+### Qodo fails with timeout (`timeout after 180s`)
+
+Symptom in `mr_qodo_runs.stderr_excerpt`:
+
+```text
+timeout after 180s
+```
+
+Fix by increasing timeout and lowering concurrency:
+
+```bash
+export QODO_INLINE_TIMEOUT_SEC=420
+export QODO_INLINE_CONCURRENCY=3
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+### Validate current qodo health quickly
+
+```bash
+sqlite3 pr_analysis.db "SELECT tool, status, COUNT(*) FROM mr_qodo_runs GROUP BY tool, status ORDER BY tool, status;"
+sqlite3 pr_analysis.db "SELECT COUNT(*) FROM mr_qodo_artifacts WHERE tool='describe';"
+```
 
 Commands:
 
