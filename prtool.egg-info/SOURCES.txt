@@ -10,6 +10,7 @@ prtool/enrich.py
 prtool/export.py
 prtool/feature_extractor.py
 prtool/gitlab_client.py
+prtool/memory.py
 prtool/pipeline.py
 prtool/seed_data.py
 prtool/viewer.py
@@ -31,9 +32,15 @@ tests/test_export_cli_scope.py
 tests/test_export_scope.py
 tests/test_group_resolution.py
 tests/test_infra_classifier.py
+tests/test_memory.py
+tests/test_memory_export_cli.py
+tests/test_memory_materialize_cli.py
+tests/test_pipeline_qodo_fallback.py
 tests/test_project_resolution.py
 tests/test_project_windows.py
 tests/test_projects_count.py
 tests/test_projects_list_rank.py
+tests/test_qodo_threshold_cli.py
+tests/test_reclassify_cli.py
 tests/test_schema.py
 tests/test_viewer.py

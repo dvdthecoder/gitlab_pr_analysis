@@ -47,7 +47,7 @@ def _class() -> dict:
         "capability_tags": ["infra", "redis"],
         "risk_tags": ["operational"],
         "classification_confidence": 0.8,
-        "classifier_version": "v2.3",
+        "classifier_version": "v2.8",
         "rationale": {"ok": True},
         "classified_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -228,3 +228,38 @@ def test_memory_materialize_from_db(tmp_path) -> None:
     )
     assert rerun["runtime_written"] == 0
     assert rerun["runtime_skipped"] >= 2
+
+
+def test_memory_semantic_local_outcome_mode(tmp_path) -> None:
+    db = Database(str(tmp_path / "memory_semantic.db"))
+    db.init_schema()
+    with db.connect() as conn:
+        mr_id = 4001
+        db.upsert_merge_request(conn, _mr(7777, 1, mr_id))
+        db.upsert_classification(conn, mr_id, _class())
+        db.upsert_feature_row(conn, mr_id, _feature())
+
+    build_runtime_for_project(
+        db,
+        7777,
+        MRBuildOptions(
+            output_root=str(tmp_path / "outputs"),
+            data_source="production",
+            include_similar_limit=2,
+            compose=False,
+            only_missing=True,
+            force=False,
+            db_only=True,
+            outcome_mode="semantic-local",
+        ),
+    )
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT outcome_mode, mr_achieved_outcome, mr_achieved_outcome_bullets_json FROM mr_memory_runtime WHERE project_id = ?",
+            (7777,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["outcome_mode"] == "semantic-local"
+    assert "Review posture" in (row["mr_achieved_outcome"] or "")

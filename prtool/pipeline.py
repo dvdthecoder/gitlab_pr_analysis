@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -218,11 +219,13 @@ def classify_project(
     *,
     only_stale: bool = False,
     target_classifier_version: str | None = None,
+    mr_ids: list[int] | None = None,
 ) -> int:
     extractor = FeatureExtractor(partial_settings)
     c_cfg = ClassificationConfig(
         infra_strong_threshold=partial_settings.infra_strong_threshold,
         infra_weak_threshold=partial_settings.infra_weak_threshold,
+        needs_review_threshold=partial_settings.classification_needs_review_threshold,
     )
 
     with db.connect() as conn:
@@ -240,13 +243,25 @@ def classify_project(
                 (project_id, expected_version),
             ).fetchall()
         else:
-            rows = conn.execute(
-                """
-                SELECT * FROM merge_requests WHERE project_id = ?
-                ORDER BY updated_at ASC
-                """,
-                (project_id,),
-            ).fetchall()
+            if mr_ids:
+                placeholders = ",".join(["?"] * len(mr_ids))
+                rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM merge_requests
+                    WHERE project_id = ? AND id IN ({placeholders})
+                    ORDER BY updated_at ASC
+                    """,
+                    (project_id, *[int(v) for v in mr_ids]),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM merge_requests WHERE project_id = ?
+                    ORDER BY updated_at ASC
+                    """,
+                    (project_id,),
+                ).fetchall()
 
         total = len(rows)
         for idx, row in enumerate(rows, start=1):
@@ -260,9 +275,30 @@ def classify_project(
             mr["labels"] = []
             labels_json = row["labels_json"]
             if labels_json:
-                import json
-
                 mr["labels"] = json.loads(labels_json)
+
+            # Use Qodo describe summary as a metadata fallback when MR description is blank.
+            # This increases structured text available for feature extraction/classification.
+            if not str(mr.get("description") or "").strip():
+                qodo = conn.execute(
+                    """
+                    SELECT qodo_summary
+                    FROM mr_qodo_artifacts
+                    WHERE mr_id = ? AND tool = 'describe'
+                    """,
+                    (mr_id,),
+                ).fetchone()
+                if qodo is None:
+                    qodo = conn.execute(
+                        """
+                        SELECT qodo_summary
+                        FROM mr_qodo_describe
+                        WHERE mr_id = ?
+                        """,
+                        (mr_id,),
+                    ).fetchone()
+                if qodo and str(qodo["qodo_summary"] or "").strip():
+                    mr["description"] = str(qodo["qodo_summary"]).strip()
 
             discussion_map = {
                 "thread_count": int(discussion["thread_count"]) if discussion else 0,

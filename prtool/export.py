@@ -37,12 +37,18 @@ def export_csv(db: Database, out_dir: str = "./exports", project_ids: list[int] 
                 "capability_tags",
                 "risk_tags",
                 "classification_confidence",
+                "confidence_band",
+                "needs_review",
                 "classifier_version",
                 "mr_outcome",
                 "regression_probability",
                 "review_depth_required",
                 "memory_score_version",
                 "memory_updated_at",
+                "mr_achieved_outcome",
+                "outcome_mode",
+                "outcome_quality_score",
+                "topic_labels",
             ]
         )
         rows = conn.execute(
@@ -51,9 +57,10 @@ def export_csv(db: Database, out_dir: str = "./exports", project_ids: list[int] 
                    c.is_infra_related, c.infra_override_applied,
                    c.complexity_level, c.complexity_score,
                    c.capability_tags_json, c.risk_tags_json,
-                   c.classification_confidence, c.classifier_version,
+                   c.classification_confidence, c.confidence_band, c.needs_review, c.classifier_version,
                    r.mr_outcome, r.regression_probability, r.review_depth_required,
-                   r.memory_score_version, r.updated_at as memory_updated_at
+                   r.memory_score_version, r.updated_at as memory_updated_at,
+                   r.mr_achieved_outcome, r.outcome_mode, r.outcome_quality_score, r.topic_labels_json
             FROM merge_requests m
             JOIN mr_classifications c ON c.mr_id = m.id
             LEFT JOIN mr_memory_runtime r ON r.mr_id = m.id
@@ -68,9 +75,10 @@ def export_csv(db: Database, out_dir: str = "./exports", project_ids: list[int] 
                 r["is_infra_related"], r["infra_override_applied"],
                 r["complexity_level"], r["complexity_score"],
                 r["capability_tags_json"], r["risk_tags_json"],
-                r["classification_confidence"], r["classifier_version"],
+                r["classification_confidence"], r["confidence_band"], r["needs_review"], r["classifier_version"],
                 r["mr_outcome"], r["regression_probability"], r["review_depth_required"],
                 r["memory_score_version"], r["memory_updated_at"],
+                r["mr_achieved_outcome"], r["outcome_mode"], r["outcome_quality_score"], r["topic_labels_json"],
             ])
 
     return target
@@ -89,10 +97,11 @@ def export_jsonl(db: Database, out_dir: str = "./exports", project_ids: list[int
                    c.is_infra_related, c.infra_override_applied,
                    c.complexity_level, c.complexity_score,
                    c.capability_tags_json, c.risk_tags_json,
-                   c.classification_confidence, c.classifier_version,
+                   c.classification_confidence, c.confidence_band, c.needs_review, c.classifier_version,
                    c.classification_rationale_json,
                    r.mr_outcome, r.regression_probability, r.review_depth_required,
-                   r.memory_score_version, r.updated_at as memory_updated_at
+                   r.memory_score_version, r.updated_at as memory_updated_at,
+                   r.mr_achieved_outcome, r.outcome_mode, r.outcome_quality_score, r.topic_labels_json
             FROM merge_requests m
             JOIN mr_classifications c ON c.mr_id = m.id
             LEFT JOIN mr_memory_runtime r ON r.mr_id = m.id
@@ -136,6 +145,10 @@ def export_memory_csv(
                 "review_depth_required",
                 "memory_score_version",
                 "memory_updated_at",
+                "mr_achieved_outcome",
+                "outcome_mode",
+                "outcome_quality_score",
+                "topic_labels",
                 "addendum_markdown_path",
                 "context_markdown_path",
             ]
@@ -151,6 +164,10 @@ def export_memory_csv(
               r.mr_outcome,
               r.regression_probability,
               r.review_depth_required,
+              r.mr_achieved_outcome,
+              r.outcome_mode,
+              r.outcome_quality_score,
+              r.topic_labels_json,
               r.memory_score_version,
               r.updated_at as memory_updated_at,
               r.addendum_markdown_path,
@@ -177,6 +194,10 @@ def export_memory_csv(
                     r["review_depth_required"],
                     r["memory_score_version"],
                     r["memory_updated_at"],
+                    r["mr_achieved_outcome"],
+                    r["outcome_mode"],
+                    r["outcome_quality_score"],
+                    r["topic_labels_json"],
                     r["addendum_markdown_path"],
                     r["context_markdown_path"],
                 ]
@@ -208,6 +229,10 @@ def export_memory_jsonl(
               r.mr_outcome,
               r.regression_probability,
               r.review_depth_required,
+              r.mr_achieved_outcome,
+              r.outcome_mode,
+              r.outcome_quality_score,
+              r.topic_labels_json,
               r.memory_score_version,
               r.updated_at as memory_updated_at,
               r.addendum_markdown_path,
@@ -226,6 +251,7 @@ def export_memory_jsonl(
             item = dict(row)
             item["assessment"] = json.loads(item.pop("assessment_json") or "{}")
             item["similar_mrs"] = json.loads(item.pop("similar_mrs_json") or "[]")
+            item["topic_labels"] = json.loads(item.pop("topic_labels_json") or "[]")
             f.write(json.dumps(item) + "\n")
 
     return target

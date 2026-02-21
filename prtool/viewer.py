@@ -5,7 +5,7 @@ import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from prtool.config import load_settings, resolve_group_ids
 from prtool.gitlab_client import GitLabSourceClient
@@ -34,6 +34,7 @@ def _filter_sql(
     complexity_level: str | None,
     mr_outcome: str | None,
     review_depth_required: str | None,
+    needs_review: str | None,
     data_source: str,
 ) -> tuple[str, tuple[Any, ...]]:
     clauses: list[str] = []
@@ -58,6 +59,9 @@ def _filter_sql(
     if review_depth_required:
         clauses.append("COALESCE(r.review_depth_required, '') = ?")
         params.append(review_depth_required)
+    if needs_review in {"0", "1"}:
+        clauses.append("COALESCE(c.needs_review, 0) = ?")
+        params.append(int(needs_review))
     if data_source != "all":
         clauses.append("m.data_source = ?")
         params.append(data_source)
@@ -128,6 +132,7 @@ def get_type_counts(
         complexity_level=complexity_level,
         mr_outcome=None,
         review_depth_required=None,
+        needs_review=None,
         data_source=data_source,
     )
     with _open_conn(db_path) as conn:
@@ -154,6 +159,7 @@ def get_overview(
     complexity_level: str | None = None,
     mr_outcome: str | None = None,
     review_depth_required: str | None = None,
+    needs_review: str | None = None,
     data_source: str = "production",
 ) -> dict[str, Any]:
     where, params = _filter_sql(
@@ -163,6 +169,7 @@ def get_overview(
         complexity_level=complexity_level,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
 
@@ -202,6 +209,7 @@ def get_heatmap(
     final_type: str | None = None,
     mr_outcome: str | None = None,
     review_depth_required: str | None = None,
+    needs_review: str | None = None,
     data_source: str = "production",
 ) -> tuple[list[str], dict[str, dict[str, int]], int]:
     where, params = _filter_sql(
@@ -211,6 +219,7 @@ def get_heatmap(
         complexity_level=None,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
 
@@ -247,6 +256,7 @@ def get_recent_rows(
     complexity_level: str | None = None,
     mr_outcome: str | None = None,
     review_depth_required: str | None = None,
+    needs_review: str | None = None,
     data_source: str = "production",
     limit: int = 200,
     sort_by: str = "complexity_desc",
@@ -258,6 +268,7 @@ def get_recent_rows(
         complexity_level=complexity_level,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
 
@@ -277,6 +288,8 @@ def get_recent_rows(
               c.capability_tags_json,
               c.risk_tags_json,
               c.classification_confidence,
+              c.confidence_band,
+              c.needs_review,
               r.mr_outcome,
               r.regression_probability,
               r.review_depth_required,
@@ -310,6 +323,7 @@ def get_enrichment_rows(
     complexity_level: str | None = None,
     mr_outcome: str | None = None,
     review_depth_required: str | None = None,
+    needs_review: str | None = None,
     data_source: str = "production",
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -320,6 +334,7 @@ def get_enrichment_rows(
         complexity_level=complexity_level,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
     with _open_conn(db_path) as conn:
@@ -422,6 +437,7 @@ def _html_page(
     complexity_level: str | None,
     mr_outcome: str | None,
     review_depth_required: str | None,
+    needs_review: str | None,
     data_source: str,
     limit: int,
     sort_by: str,
@@ -436,6 +452,7 @@ def _html_page(
         complexity_level=complexity_level,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
     type_counts = get_type_counts(
@@ -453,6 +470,7 @@ def _html_page(
         complexity_level=complexity_level,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
         limit=limit,
         sort_by=sort_by,
@@ -464,27 +482,9 @@ def _html_page(
         final_type=final_type,
         mr_outcome=mr_outcome,
         review_depth_required=review_depth_required,
+        needs_review=needs_review,
         data_source=data_source,
     )
-    enrich_rows = get_enrichment_rows(
-        db_path,
-        project_id=project_id,
-        project_ids=group_project_ids,
-        final_type=final_type,
-        complexity_level=complexity_level,
-        mr_outcome=mr_outcome,
-        review_depth_required=review_depth_required,
-        data_source=data_source,
-        limit=min(limit, 300),
-    )
-    compactions = get_project_compactions(
-        db_path,
-        project_id=project_id,
-        project_ids=group_project_ids,
-        data_source=data_source,
-        limit=100,
-    )
-
     project_options = ['<option value="">All</option>']
     for pid in projects:
         selected = " selected" if project_id == pid else ""
@@ -506,6 +506,13 @@ def _html_page(
         selected = " selected" if (mr_outcome or "") == val else ""
         label = "All" if not val else val
         outcome_options.append(f'<option value="{val}"{selected}>{label}</option>')
+
+    needs_review_values = ["", "1", "0"]
+    needs_review_options = []
+    for val in needs_review_values:
+        selected = " selected" if (needs_review or "") == val else ""
+        label = "All" if not val else ("Yes" if val == "1" else "No")
+        needs_review_options.append(f'<option value="{val}"{selected}>{label}</option>')
 
     depth_values = ["", "shallow", "standard", "deep"]
     depth_options = []
@@ -545,6 +552,8 @@ def _html_page(
             f"<td>{html.escape(str(r['capability_tags_json'] or '[]'))}</td>"
             f"<td>{html.escape(str(r['risk_tags_json'] or '[]'))}</td>"
             f"<td>{float(r['classification_confidence'] or 0.0):.2f}</td>"
+            f"<td>{html.escape(str(r['confidence_band'] or ''))}</td>"
+            f"<td>{'Yes' if int(r['needs_review'] or 0) == 1 else 'No'}</td>"
             f"<td>{html.escape(str(r['mr_outcome'] or ''))}</td>"
             f"<td>{float(r['regression_probability'] or 0.0):.2f}</td>"
             f"<td>{html.escape(str(r['review_depth_required'] or ''))}</td>"
@@ -558,46 +567,8 @@ def _html_page(
             "</tr>"
         )
 
-    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='20'>No rows found</td></tr>"
+    rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='22'>No rows found</td></tr>"
     heatmap_html = _render_heatmap(heat_rows, heat_matrix, heat_max)
-
-    compaction_rows = []
-    for row in compactions:
-        compact_path = str(row["compact_markdown_path"] or "")
-        mermaid_path = str(row["overview_mermaid_path"] or "")
-        compact_href = f"/artifact?path={quote_plus(compact_path)}" if compact_path else ""
-        mermaid_href = f"/artifact?path={quote_plus(mermaid_path)}" if mermaid_path else ""
-        compact_link = f'<a href="{compact_href}" target="_blank">compact.md</a>' if compact_href else "-"
-        mermaid_link = f'<a href="{mermaid_href}" target="_blank">overview.mmd</a>' if mermaid_href else "-"
-        compaction_rows.append(
-            "<tr>"
-            f"<td>{int(row['project_id'])}</td>"
-            f"<td>{int(row['source_mr_count'] or 0)}</td>"
-            f"<td>{html.escape(str(row['updated_at'] or ''))}</td>"
-            f"<td>{compact_link}</td>"
-            f"<td>{mermaid_link}</td>"
-            "</tr>"
-        )
-    compaction_html = "".join(compaction_rows) if compaction_rows else "<tr><td colspan='5'>No compaction artifacts found</td></tr>"
-
-    enrich_table_rows = []
-    for row in enrich_rows:
-        md_path = str(row["markdown_path"] or "")
-        href = f"/artifact?path={quote_plus(md_path)}" if md_path else ""
-        describe_link = f'<a href="{href}" target="_blank">describe.md</a>' if href else "-"
-        preview = (row["qodo_summary"] or "")[:300]
-        enrich_table_rows.append(
-            "<tr>"
-            f"<td>{int(row['project_id'])}</td>"
-            f"<td>{int(row['iid'])}</td>"
-            f"<td>{html.escape(str(row['qodo_type'] or ''))}</td>"
-            f"<td>{html.escape(str(row['qodo_title'] or ''))}</td>"
-            f"<td>{html.escape(preview)}</td>"
-            f"<td>{html.escape(str(row['updated_at'] or ''))}</td>"
-            f"<td>{describe_link}</td>"
-            "</tr>"
-        )
-    enrich_html = "".join(enrich_table_rows) if enrich_table_rows else "<tr><td colspan='7'>No enrichment rows found</td></tr>"
 
     return f"""<!doctype html>
 <html lang="en">
@@ -642,6 +613,7 @@ small {{ color: #6b7280; }}
   <div><label>Complexity</label><br /><select name="complexity_level">{''.join(complexity_options)}</select></div>
   <div><label>Outcome</label><br /><select name="mr_outcome">{''.join(outcome_options)}</select></div>
   <div><label>Review depth</label><br /><select name="review_depth_required">{''.join(depth_options)}</select></div>
+  <div><label>Needs review</label><br /><select name="needs_review">{''.join(needs_review_options)}</select></div>
   <div><label>Data source</label><br /><select name="data_source">{''.join(data_source_options)}</select></div>
   <div><label>Sort</label><br /><select name="sort">{''.join(sort_options)}</select></div>
   <div><label>Rows</label><br /><input type="number" name="limit" value="{limit}" min="1" max="1000" /></div>
@@ -659,7 +631,7 @@ small {{ color: #6b7280; }}
   <thead>
     <tr>
       <th>Project</th><th>MR IID</th><th>Title</th><th>Base</th><th>Final</th>
-      <th>Complexity</th><th>Score</th><th>Tags</th><th>Risks</th><th>Conf</th><th>Outcome</th><th>RegProb</th><th>Depth</th><th>Files</th><th>Churn</th><th>Commits</th>
+      <th>Complexity</th><th>Score</th><th>Tags</th><th>Risks</th><th>Conf</th><th>Band</th><th>NeedsReview</th><th>Outcome</th><th>RegProb</th><th>Depth</th><th>Files</th><th>Churn</th><th>Commits</th>
       <th>Comments</th><th>Unresolved</th><th>CI Failed</th><th>Updated</th>
     </tr>
   </thead>
@@ -667,29 +639,6 @@ small {{ color: #6b7280; }}
 </table>
 </div>
 
-<h3>Enrichment Artifacts</h3>
-<div class="tablewrap">
-<table>
-  <thead>
-    <tr>
-      <th>Project</th><th>Source MRs</th><th>Updated</th><th>Compact</th><th>Mermaid</th>
-    </tr>
-  </thead>
-  <tbody>{compaction_html}</tbody>
-</table>
-</div>
-
-<h3>Enriched MR Describe Output</h3>
-<div class="tablewrap">
-<table>
-  <thead>
-    <tr>
-      <th>Project</th><th>MR IID</th><th>Type</th><th>Qodo Title</th><th>Preview</th><th>Updated</th><th>Describe</th>
-    </tr>
-  </thead>
-  <tbody>{enrich_html}</tbody>
-</table>
-</div>
 </body>
 </html>
 """
@@ -745,6 +694,7 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
             complexity_level_raw = params.get("complexity_level", [""])[0].strip()
             mr_outcome_raw = params.get("mr_outcome", [""])[0].strip()
             review_depth_raw = params.get("review_depth_required", [""])[0].strip()
+            needs_review_raw = params.get("needs_review", [""])[0].strip()
             data_source_raw = params.get("data_source", ["production"])[0].strip()
             limit_raw = params.get("limit", ["200"])[0].strip()
             sort_raw = params.get("sort", ["complexity_desc"])[0].strip()
@@ -754,6 +704,7 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
             complexity_level = complexity_level_raw or None
             mr_outcome = mr_outcome_raw or None
             review_depth_required = review_depth_raw or None
+            needs_review = needs_review_raw if needs_review_raw in {"0", "1"} else None
             data_source = data_source_raw if data_source_raw in DATA_SOURCES else "production"
 
             try:
@@ -771,6 +722,7 @@ def run_viewer(db_path: str, host: str = "127.0.0.1", port: int = 8765) -> None:
                 complexity_level=complexity_level,
                 mr_outcome=mr_outcome,
                 review_depth_required=review_depth_required,
+                needs_review=needs_review,
                 data_source=data_source,
                 limit=limit,
                 sort_by=sort_by,

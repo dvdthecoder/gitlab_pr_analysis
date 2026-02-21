@@ -57,6 +57,87 @@ class FeatureExtractor:
             matched_labels=sorted(set(label_hits)),
         )
 
+    @staticmethod
+    def _path_stats(files: list[dict[str, Any]]) -> dict[str, Any]:
+        paths = [str(f.get("new_path") or f.get("old_path") or "").strip().lower() for f in files]
+        total = max(1, len(paths))
+
+        dep_files = {
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "poetry.lock",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "gemfile.lock",
+            "composer.lock",
+            "cargo.lock",
+            "go.mod",
+            "go.sum",
+        }
+
+        def basename(p: str) -> str:
+            return p.split("/")[-1] if p else ""
+
+        docs = [p for p in paths if p.endswith(".md") or p.startswith("docs/") or "/docs/" in p]
+        tests = [
+            p
+            for p in paths
+            if "test" in p
+            or p.endswith("_test.py")
+            or p.endswith(".spec.ts")
+            or p.endswith(".spec.js")
+            or p.endswith(".test.ts")
+            or p.endswith(".test.js")
+        ]
+        deps = [p for p in paths if basename(p) in dep_files]
+        infra = [
+            p
+            for p in paths
+            if p in {".gitlab-ci.yml", ".gitlab-ci.yaml", "dockerfile", "serverless.yml"}
+            or p.startswith("infra/")
+            or p.startswith("infrastructure/")
+            or p.startswith("terraform/")
+            or p.startswith("helm/")
+            or p.startswith("k8s/")
+            or p.endswith(".tf")
+            or p.endswith(".tfvars")
+            or p.startswith(".github/workflows/")
+        ]
+        config = [
+            p
+            for p in paths
+            if p.endswith(".yml")
+            or p.endswith(".yaml")
+            or p.endswith(".json")
+            or p.endswith(".toml")
+            or p.endswith(".ini")
+            or p.endswith(".conf")
+            or p.endswith(".properties")
+            or p.endswith(".env")
+        ]
+
+        code = [p for p in paths if p and p not in docs and p not in tests and p not in deps]
+        dep_only = bool(paths) and len(deps) == len(paths)
+
+        return {
+            "docs_file_count": len(docs),
+            "test_file_count": len(tests),
+            "dep_file_count": len(deps),
+            "infra_file_count": len(infra),
+            "config_file_count": len(config),
+            "code_file_count": len(code),
+            "docs_file_ratio": round(len(docs) / total, 4),
+            "test_file_ratio": round(len(tests) / total, 4),
+            "dep_file_ratio": round(len(deps) / total, 4),
+            "infra_file_ratio": round(len(infra) / total, 4),
+            "code_file_ratio": round(len(code) / total, 4),
+            "dep_only_change": dep_only,
+        }
+
     def extract(
         self,
         mr: dict[str, Any],
@@ -68,10 +149,12 @@ class FeatureExtractor:
         title = mr.get("title", "")
         description = mr.get("description") or ""
         labels = [str(l) for l in mr.get("labels", [])]
+        commit_message_text = " ".join(str(c.get("title") or c.get("message") or "") for c in commits).lower()
 
         additions = sum(int(f.get("additions", 0)) for f in files)
         deletions = sum(int(f.get("deletions", 0)) for f in files)
         infra = self._extract_infra_signals(title, description, labels)
+        path_stats = self._path_stats(files)
 
         return {
             "files_changed": len(files),
@@ -91,4 +174,8 @@ class FeatureExtractor:
             "matched_infra_keywords": infra.matched_keywords,
             "matched_infra_tickets": infra.matched_tickets,
             "matched_infra_labels": infra.matched_labels,
+            "label_count": len(labels),
+            "has_description": bool(description.strip()),
+            "commit_message_text": commit_message_text,
+            **path_stats,
         }
