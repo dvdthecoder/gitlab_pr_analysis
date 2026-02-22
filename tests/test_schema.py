@@ -12,6 +12,7 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
         class_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_classifications)").fetchall()}
         mr_cols = {r[1] for r in conn.execute("PRAGMA table_info(merge_requests)").fetchall()}
         qodo_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_qodo_describe)").fetchall()}
+        qodo_art_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_qodo_artifacts)").fetchall()}
         comp_cols = {r[1] for r in conn.execute("PRAGMA table_info(project_qodo_compaction)").fetchall()}
         mem_base_cols = {r[1] for r in conn.execute("PRAGMA table_info(project_memory_baseline)").fetchall()}
         mem_runtime_cols = {r[1] for r in conn.execute("PRAGMA table_info(mr_memory_runtime)").fetchall()}
@@ -36,6 +37,12 @@ def test_schema_contains_infra_columns(tmp_path) -> None:
     assert "data_source" in mr_cols
     assert "markdown_path" in qodo_cols
     assert "qodo_type" in qodo_cols
+    assert "reviewer_summary" in qodo_cols
+    assert "reviewer_summary_status" in qodo_cols
+    assert "context_quality_score" in qodo_cols
+    assert "reviewer_summary" in qodo_art_cols
+    assert "reviewer_summary_status" in qodo_art_cols
+    assert "context_quality_score" in qodo_art_cols
     assert "compact_markdown_path" in comp_cols
     assert "baseline_json" in mem_base_cols
     assert "markdown_path" in mem_base_cols

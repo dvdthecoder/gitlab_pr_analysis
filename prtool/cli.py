@@ -48,6 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EXPORT_DIR = str(REPO_ROOT / "exports")
 DEFAULT_QODO_OUTPUT_ROOT = str(REPO_ROOT / "outputs" / "qodo")
 DEFAULT_MEMORY_OUTPUT_ROOT = str(REPO_ROOT / "outputs" / "memory")
+DEFAULT_MR_CONTEXT_OUTPUT_ROOT = str(REPO_ROOT / "outputs" / "mr_context")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,6 +118,36 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("QODO_INLINE_ONLY_MISSING", "true").strip().lower() in {"1", "true", "yes", "on"},
     )
     reclassify_cmd.add_argument("--qodo-output-root", default=DEFAULT_QODO_OUTPUT_ROOT)
+
+    mr_context_cmd = sub.add_parser("mr-context")
+    mr_context_cmd.add_argument("--project-id", type=int)
+    mr_context_cmd.add_argument("--mr-iid", type=int)
+    mr_context_cmd.add_argument("--mr-url")
+    mr_context_cmd.add_argument("--out-path")
+    mr_context_cmd.add_argument("--output-root", default=DEFAULT_MR_CONTEXT_OUTPUT_ROOT)
+    mr_context_cmd.add_argument("--data-source", choices=["production", "test", "all"], default="production")
+    mr_context_cmd.add_argument(
+        "--qodo-inline",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run Qodo for this MR before rendering context",
+    )
+    mr_context_cmd.add_argument("--qodo-tools", default="describe", help="Comma-separated tools: describe,review,improve")
+    mr_context_cmd.add_argument("--qodo-concurrency", type=int, default=1)
+    mr_context_cmd.add_argument("--qodo-timeout-sec", type=int, default=int(os.getenv("QODO_INLINE_TIMEOUT_SEC", "180")))
+    mr_context_cmd.add_argument(
+        "--qodo-only-missing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip Qodo tools already present for this MR",
+    )
+    mr_context_cmd.add_argument("--qodo-output-root", default=DEFAULT_QODO_OUTPUT_ROOT)
+    mr_context_cmd.add_argument(
+        "--reclassify",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Re-run classifier for this MR after optional Qodo run",
+    )
 
     export_cmd = sub.add_parser("export")
     export_cmd.add_argument("--format", choices=["csv", "jsonl", "both"], default="both")
@@ -549,6 +580,350 @@ def _parse_reason_filter(raw: str) -> tuple[str, ...]:
     return tuple(deduped)
 
 
+def _parse_json_array(raw: str | None) -> list[Any]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _parse_json_object(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _looks_like_diff_text(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    prefixes = ("@@ ", "diff --git", "+++ ", "--- ", "+", "-")
+    first_lines = [ln.strip() for ln in t.splitlines()[:6] if ln.strip()]
+    if not first_lines:
+        return False
+    hits = 0
+    for ln in first_lines:
+        if any(ln.startswith(p) for p in prefixes):
+            hits += 1
+    return hits >= max(2, len(first_lines) // 2)
+
+
+def _resolve_single_mr(db: Database, args: argparse.Namespace) -> dict[str, Any]:
+    has_pair = args.project_id is not None or args.mr_iid is not None
+    has_url = bool((args.mr_url or "").strip())
+    if has_pair and has_url:
+        raise ValueError("Use either --mr-url or (--project-id and --mr-iid), not both")
+    if has_pair:
+        if args.project_id is None or args.mr_iid is None:
+            raise ValueError("Both --project-id and --mr-iid are required together")
+    if not has_pair and not has_url:
+        raise ValueError("Provide --mr-url or both --project-id and --mr-iid")
+
+    with db.connect() as conn:
+        params: list[Any] = []
+        clauses: list[str] = []
+        if has_url:
+            clauses.append("m.web_url = ?")
+            params.append(str(args.mr_url).strip())
+        else:
+            clauses.append("m.project_id = ?")
+            clauses.append("m.iid = ?")
+            params.extend([int(args.project_id), int(args.mr_iid)])
+        if args.data_source != "all":
+            clauses.append("m.data_source = ?")
+            params.append(args.data_source)
+        where = " AND ".join(clauses)
+        row = conn.execute(
+            f"""
+            SELECT
+              m.id,
+              m.project_id,
+              m.iid,
+              m.title,
+              m.description,
+              m.state,
+              m.author_username,
+              m.labels_json,
+              m.web_url,
+              m.created_at,
+              m.updated_at,
+              m.merged_at,
+              m.closed_at,
+              m.source_branch,
+              m.target_branch,
+              m.data_source
+            FROM merge_requests m
+            WHERE {where}
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+    if not row:
+        if has_url:
+            raise ValueError(f"MR not found in DB for --mr-url={args.mr_url}")
+        raise ValueError(f"MR not found in DB for project_id={args.project_id}, mr_iid={args.mr_iid}")
+    return dict(row)
+
+
+def _load_single_mr_bundle(db: Database, mr_id: int) -> dict[str, Any]:
+    with db.connect() as conn:
+        mr = conn.execute(
+            """
+            SELECT
+              m.*,
+              f.files_changed, f.additions, f.deletions, f.churn, f.commit_count,
+              f.review_comment_count, f.review_thread_count, f.unresolved_thread_count,
+              f.pipeline_failed_count, f.infra_signal_level, f.infra_signal_score, f.feature_json,
+              c.base_type, c.final_type, c.complexity_level, c.complexity_score,
+              c.is_infra_related, c.infra_override_applied, c.classification_confidence,
+              c.confidence_band, c.needs_review, c.classifier_version,
+              c.capability_tags_json, c.risk_tags_json, c.classification_rationale_json, c.classified_at,
+              d.thread_count, d.note_count, d.unresolved_count,
+              p.pipeline_count, p.failed_count, p.success_count, p.retry_count,
+              r.mr_outcome, r.mr_achieved_outcome, r.mr_achieved_outcome_bullets_json,
+              r.outcome_source, r.outcome_mode, r.outcome_quality_score, r.topic_labels_json,
+              r.regression_probability, r.review_depth_required, r.assessment_json, r.similar_mrs_json,
+              r.addendum_markdown_path, r.context_markdown_path, r.updated_at AS memory_updated_at
+            FROM merge_requests m
+            LEFT JOIN mr_features f ON f.mr_id = m.id
+            LEFT JOIN mr_classifications c ON c.mr_id = m.id
+            LEFT JOIN mr_discussions d ON d.mr_id = m.id
+            LEFT JOIN mr_pipelines p ON p.mr_id = m.id
+            LEFT JOIN mr_memory_runtime r ON r.mr_id = m.id
+            WHERE m.id = ?
+            LIMIT 1
+            """,
+            (mr_id,),
+        ).fetchone()
+        if not mr:
+            raise ValueError(f"MR id={mr_id} no longer exists")
+
+        files = conn.execute(
+            """
+            SELECT path, additions, deletions, (additions + deletions) AS churn
+            FROM mr_files
+            WHERE mr_id = ?
+            ORDER BY churn DESC, path ASC
+            LIMIT 25
+            """,
+            (mr_id,),
+        ).fetchall()
+        commits = conn.execute(
+            """
+            SELECT commit_sha, title, authored_date
+            FROM mr_commits
+            WHERE mr_id = ?
+            ORDER BY authored_date DESC
+            LIMIT 10
+            """,
+            (mr_id,),
+        ).fetchall()
+        qodo = conn.execute(
+            """
+            SELECT
+              tool, qodo_title, qodo_type, qodo_summary, qodo_sections_json, qodo_labels_json,
+              quality_status, reviewer_summary, reviewer_summary_status, context_quality_score,
+              prompt_leak_count, updated_at, markdown_path, structured_payload_json
+            FROM mr_qodo_artifacts
+            WHERE mr_id = ?
+            ORDER BY CASE tool
+                WHEN 'describe' THEN 1
+                WHEN 'review' THEN 2
+                WHEN 'improve' THEN 3
+                ELSE 4
+              END, updated_at DESC
+            """,
+            (mr_id,),
+        ).fetchall()
+    return {
+        "mr": dict(mr),
+        "files": [dict(r) for r in files],
+        "commits": [dict(r) for r in commits],
+        "qodo": [dict(r) for r in qodo],
+    }
+
+
+def _default_mr_context_path(output_root: str, project_id: int, mr_iid: int) -> Path:
+    return Path(output_root) / f"mr_context_{project_id}_{mr_iid}.md"
+
+
+def _render_single_mr_context(bundle: dict[str, Any]) -> str:
+    mr = bundle["mr"]
+    files = bundle["files"]
+    commits = bundle["commits"]
+    qodo_rows = bundle["qodo"]
+
+    labels = _parse_json_array(mr.get("labels_json"))
+    capability_tags = _parse_json_array(mr.get("capability_tags_json"))
+    risk_tags = _parse_json_array(mr.get("risk_tags_json"))
+    rationale = _parse_json_object(mr.get("classification_rationale_json"))
+    why_review = rationale.get("why_needs_review") if isinstance(rationale.get("why_needs_review"), list) else []
+
+    achieved_bullets = _parse_json_array(mr.get("mr_achieved_outcome_bullets_json"))
+    topic_labels = _parse_json_array(mr.get("topic_labels_json"))
+
+    lines: list[str] = []
+    lines.append(f"# MR Context: !{mr.get('iid')} {mr.get('title') or ''}")
+    lines.append("")
+    lines.append("## Overview")
+    lines.append(f"- project_id: {mr.get('project_id')}")
+    lines.append(f"- mr_id: {mr.get('id')}")
+    lines.append(f"- mr_iid: {mr.get('iid')}")
+    lines.append(f"- web_url: {mr.get('web_url') or ''}")
+    lines.append(f"- state: {mr.get('state') or ''}")
+    lines.append(f"- author: {mr.get('author_username') or ''}")
+    lines.append(f"- source -> target: {mr.get('source_branch') or ''} -> {mr.get('target_branch') or ''}")
+    lines.append(f"- created_at: {mr.get('created_at') or ''}")
+    lines.append(f"- updated_at: {mr.get('updated_at') or ''}")
+    lines.append(f"- merged_at: {mr.get('merged_at') or ''}")
+    lines.append(f"- labels: {', '.join(str(x) for x in labels) if labels else '(none)'}")
+    lines.append("")
+
+    lines.append("## Description")
+    desc = str(mr.get("description") or "").strip()
+    lines.append(desc if desc else "(empty)")
+    lines.append("")
+
+    lines.append("## Classification Snapshot")
+    lines.append(f"- classifier_version: {mr.get('classifier_version') or ''}")
+    lines.append(f"- final_type: {mr.get('final_type') or ''} (base_type={mr.get('base_type') or ''})")
+    lines.append(f"- confidence: {float(mr.get('classification_confidence') or 0.0):.3f} ({mr.get('confidence_band') or ''})")
+    lines.append(f"- needs_review: {int(mr.get('needs_review') or 0)}")
+    lines.append(f"- complexity: {mr.get('complexity_level') or ''} ({float(mr.get('complexity_score') or 0.0):.2f})")
+    lines.append(f"- infra_related: {int(mr.get('is_infra_related') or 0)}")
+    lines.append(f"- infra_override_applied: {int(mr.get('infra_override_applied') or 0)}")
+    lines.append(f"- capability_tags: {', '.join(str(x) for x in capability_tags) if capability_tags else '(none)'}")
+    lines.append(f"- risk_tags: {', '.join(str(x) for x in risk_tags) if risk_tags else '(none)'}")
+    lines.append(f"- why_needs_review: {', '.join(str(x) for x in why_review) if why_review else '(none)'}")
+    lines.append("")
+
+    lines.append("## Engineering Signals")
+    lines.append(
+        f"- files_changed={int(mr.get('files_changed') or 0)} additions={int(mr.get('additions') or 0)} "
+        f"deletions={int(mr.get('deletions') or 0)} churn={int(mr.get('churn') or 0)}"
+    )
+    lines.append(
+        f"- commits={int(mr.get('commit_count') or 0)} review_comments={int(mr.get('review_comment_count') or 0)} "
+        f"review_threads={int(mr.get('review_thread_count') or 0)} unresolved_threads={int(mr.get('unresolved_thread_count') or 0)}"
+    )
+    lines.append(
+        f"- pipeline_count={int(mr.get('pipeline_count') or 0)} failed={int(mr.get('failed_count') or 0)} "
+        f"success={int(mr.get('success_count') or 0)} retries={int(mr.get('retry_count') or 0)}"
+    )
+    lines.append(
+        f"- infra_signal={mr.get('infra_signal_level') or ''} ({float(mr.get('infra_signal_score') or 0.0):.2f})"
+    )
+    lines.append("")
+
+    lines.append("## Changed Files (Top by Churn)")
+    if files:
+        for row in files:
+            lines.append(
+                f"- `{row.get('path')}` (+{int(row.get('additions') or 0)} / -{int(row.get('deletions') or 0)}, churn={int(row.get('churn') or 0)})"
+            )
+    else:
+        lines.append("- (no file-level rows)")
+    lines.append("")
+
+    lines.append("## Recent Commits")
+    if commits:
+        for row in commits:
+            sha = str(row.get("commit_sha") or "")[:10]
+            lines.append(f"- `{sha}` {row.get('title') or ''} ({row.get('authored_date') or ''})")
+    else:
+        lines.append("- (no commit rows)")
+    lines.append("")
+
+    lines.append("## Qodo / LLM Artifacts")
+    if qodo_rows:
+        for row in qodo_rows:
+            q_labels = _parse_json_array(row.get("qodo_labels_json"))
+            reviewer_summary = str(row.get("reviewer_summary") or "").strip()
+            reviewer_summary_status = str(row.get("reviewer_summary_status") or "missing").strip().lower()
+            quality_status = str(row.get("quality_status") or "").strip().lower()
+            prompt_leaks = int(row.get("prompt_leak_count") or 0)
+            clean_labels = [str(x).strip() for x in q_labels if str(x).strip() and not _looks_like_diff_text(str(x))]
+            quality_ok = (
+                quality_status in {"pass", "ok", "clean"}
+                and prompt_leaks == 0
+                and reviewer_summary_status == "clean"
+                and bool(reviewer_summary)
+            )
+            lines.append(f"### {str(row.get('tool') or '').upper()}")
+            lines.append(f"- title: {row.get('qodo_title') or ''}")
+            lines.append(f"- type: {row.get('qodo_type') or ''}")
+            lines.append(f"- quality_status: {row.get('quality_status') or ''}")
+            lines.append(f"- reviewer_summary_status: {reviewer_summary_status}")
+            lines.append(f"- context_quality_score: {float(row.get('context_quality_score') or 0.0):.3f}")
+            lines.append(f"- prompt_leak_count: {prompt_leaks}")
+            lines.append(f"- updated_at: {row.get('updated_at') or ''}")
+            if quality_ok:
+                lines.append(f"- labels: {', '.join(clean_labels) if clean_labels else '(none)'}")
+                lines.append(f"- summary: {reviewer_summary}")
+            else:
+                lines.append("- labels: (suppressed due to low-quality/parsing artifacts)")
+                lines.append("- summary: (suppressed due to low-quality/parsing artifacts)")
+            lines.append("")
+    else:
+        lines.append("- (no qodo artifacts)")
+        lines.append("")
+
+    lines.append("## Runtime Memory (If Available)")
+    if mr.get("mr_outcome") is not None:
+        lines.append(f"- mr_outcome: {mr.get('mr_outcome') or ''}")
+        lines.append(f"- achieved_outcome: {mr.get('mr_achieved_outcome') or ''}")
+        lines.append(f"- achieved_outcome_quality: {float(mr.get('outcome_quality_score') or 0.0):.2f}")
+        lines.append(f"- outcome_source/mode: {mr.get('outcome_source') or ''}/{mr.get('outcome_mode') or ''}")
+        lines.append(f"- regression_probability: {float(mr.get('regression_probability') or 0.0):.2f}")
+        lines.append(f"- review_depth_required: {mr.get('review_depth_required') or ''}")
+        lines.append(f"- topic_labels: {', '.join(str(x) for x in topic_labels) if topic_labels else '(none)'}")
+        if achieved_bullets:
+            lines.append("- achieved_outcome_bullets:")
+            for bullet in achieved_bullets[:8]:
+                lines.append(f"  - {bullet}")
+        lines.append(f"- memory_updated_at: {mr.get('memory_updated_at') or ''}")
+    else:
+        lines.append("- (no memory runtime row)")
+    lines.append("")
+
+    data_quality_flags: list[str] = []
+    files_changed = int(mr.get("files_changed") or 0)
+    adds = int(mr.get("additions") or 0)
+    dels = int(mr.get("deletions") or 0)
+    if files_changed > 0 and (adds + dels) == 0:
+        data_quality_flags.append("zero_churn_with_files_changed")
+    if any((str(r.get("quality_status") or "").strip().lower() not in {"pass", "ok", "clean"}) or int(r.get("prompt_leak_count") or 0) > 0 for r in qodo_rows):
+        data_quality_flags.append("qodo_low_quality_or_prompt_leak")
+    final_type = str(mr.get("final_type") or "").strip().lower()
+    if final_type and any(str(t).strip().lower() == "chore" for t in topic_labels) and final_type != "chore":
+        data_quality_flags.append("classifier_memory_type_mismatch")
+
+    lines.append("## Data Quality Flags")
+    if data_quality_flags:
+        for flag in data_quality_flags:
+            lines.append(f"- {flag}")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    lines.append("## Reviewer Focus")
+    lines.append("- Verify intent aligns with changed files and branch target.")
+    lines.append("- Validate high-churn files and unresolved threads first.")
+    lines.append("- Confirm pipeline failures/retries are explained or resolved.")
+    lines.append("- If Qodo output exists, compare summary against actual diff for drift.")
+    lines.append("- For `needs_review=1`, resolve listed reasons before merge approval.")
+    lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
 def _needs_review_stats(
     db: Database,
     project_ids: list[int],
@@ -809,6 +1184,71 @@ def main(argv: list[str] | None = None) -> int:
             total += count
             print(f"[project {project_id}] Reclassification complete: {count} merge requests processed")
         print(f"Reclassification total across projects: {total}")
+        return 0
+
+    if args.command == "mr-context":
+        db.init_schema()
+        target = _resolve_single_mr(db, args)
+        mr_id = int(target["id"])
+        project_id = int(target["project_id"])
+        mr_iid = int(target["iid"])
+        print(f"Target MR: project_id={project_id} mr_iid={mr_iid} mr_id={mr_id}")
+
+        qodo_tools = _parse_tools(args.qodo_tools)
+        if bool(args.qodo_inline):
+            if not (target.get("web_url") or "").strip():
+                print("[mr-context] skipped qodo-inline: MR has no web_url")
+            else:
+                qodo_opts = EnrichOptions(
+                    output_root=args.qodo_output_root,
+                    concurrency=max(1, int(args.qodo_concurrency)),
+                    mr_limit=1,
+                    only_missing=bool(args.qodo_only_missing),
+                    force=False,
+                    data_source=args.data_source,
+                    timeout_sec=int(args.qodo_timeout_sec),
+                    compact_max_tokens=3000,
+                    include_mermaid=True,
+                    tools=qodo_tools,
+                    progress=True,
+                )
+                qodo_result = enrich_qodo_project(
+                    db,
+                    project_id,
+                    qodo_opts,
+                    candidates=[
+                        {
+                            "id": mr_id,
+                            "project_id": project_id,
+                            "iid": mr_iid,
+                            "web_url": target.get("web_url"),
+                        }
+                    ],
+                )
+                compact_project_qodo(db, project_id, qodo_opts)
+                print(
+                    f"[mr-context] qodo tools={','.join(qodo_tools)} "
+                    f"eligible={qodo_result['eligible']} success={qodo_result['success']} "
+                    f"failed={qodo_result['failed']} skipped={qodo_result['skipped']}"
+                )
+
+        if bool(args.reclassify):
+            reclassified = classify_project(
+                db,
+                partial,
+                project_id,
+                only_stale=False,
+                target_classifier_version=CLASSIFIER_VERSION,
+                mr_ids=[mr_id],
+            )
+            print(f"[mr-context] reclassified={reclassified}")
+
+        bundle = _load_single_mr_bundle(db, mr_id)
+        rendered = _render_single_mr_context(bundle)
+        out_path = Path(args.out_path) if args.out_path else _default_mr_context_path(args.output_root, project_id, mr_iid)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered, encoding="utf-8")
+        print(f"MR context written: {out_path}")
         return 0
 
     if args.command == "export":

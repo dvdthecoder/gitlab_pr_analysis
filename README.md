@@ -2,6 +2,37 @@
 
 Python CLI for GitLab Merge Request analysis with SQLite storage, infra-aware type classification, and complexity scoring.
 
+## Single MR Context (New)
+
+Use this command when you want one rich markdown context for a specific MR (for handoff/review/history).
+
+Execution order in one command:
+1. Render rich context markdown from SQLite (fast default)
+2. Optional Qodo run for the MR (`describe` by default, configurable)
+3. Optional targeted reclassification for the same MR
+
+Examples:
+
+```bash
+prtool mr-context --project-id 123 --mr-iid 456
+prtool mr-context --project-id 123 --mr-iid 456 --qodo-inline --reclassify
+prtool mr-context --mr-url https://gitlab.example/org/repo/-/merge_requests/456 --qodo-tools describe,review
+prtool mr-context --project-id 123 --mr-iid 456 --no-qodo-inline --no-reclassify
+```
+
+Default output path:
+
+```text
+outputs/mr_context/mr_context_<project_id>_<mr_iid>.md
+```
+
+Key options:
+- `--project-id` + `--mr-iid` or `--mr-url` (pick one method)
+- `--qodo-inline/--no-qodo-inline` (default: off)
+- `--reclassify/--no-reclassify` (default: off)
+- `--qodo-tools describe,review,improve`
+- `--out-path` to override output location
+
 ## Quick start
 
 ```bash
@@ -170,6 +201,9 @@ prtool reclassify --all-projects
 prtool reclassify --all-projects --only-stale
 prtool reclassify --all-projects --force
 prtool reclassify --all-projects --force --qodo-inline --qodo-min-confidence 0.70 --qodo-max-confidence 0.75
+prtool mr-context --project-id 123 --mr-iid 456
+prtool mr-context --mr-url https://gitlab.example/org/repo/-/merge_requests/456 --qodo-tools describe,review
+prtool mr-context --project-id 123 --mr-iid 456 --no-qodo-inline --no-reclassify
 prtool batch run --all-projects
 prtool batch run --group-id your-org/your-group
 prtool batch run --group-id your-org/your-group --concurrency 5 --light-mode
@@ -221,6 +255,7 @@ If `--group-id` (or `GITLAB_GROUP_ID(S)`) is provided, project discovery is scop
 `enrich qodo-threshold` selects `needs_review=1` MRs in a configurable confidence band (default `0.70..0.75`), runs Qodo, then automatically reclassifies the same MR IDs.
 `enrich qodo-threshold` filters can be tuned with `--reasons`, `--require-empty-description`, and env vars (`QODO_TRIGGER_MIN_CONF`, `QODO_TRIGGER_MAX_CONF`, `QODO_TRIGGER_REASONS`).
 `reclassify` can run threshold-based Qodo inline via `--qodo-inline` (or env `QODO_INLINE_ENABLED=true`) before classification.
+`mr-context` generates one rich MR markdown context file from DB signals (classification/features/files/commits/memory) and optional inline Qodo run.
 `--concurrency` controls MR detail fetch workers (default 5).
 `--light-mode` fetches metadata/commits/files only (skips discussions/approvals/pipelines for faster sync).
 Viewer defaults to `production` data-source rows, supports complexity-level filter, and sorts by complexity high-to-low by default.

@@ -147,6 +147,9 @@ CREATE TABLE IF NOT EXISTS mr_qodo_describe (
   qodo_labels_json TEXT,
   parser_version TEXT,
   quality_status TEXT,
+  reviewer_summary TEXT,
+  reviewer_summary_status TEXT NOT NULL DEFAULT 'missing',
+  context_quality_score REAL NOT NULL DEFAULT 0.0,
   prompt_leak_count INTEGER NOT NULL DEFAULT 0,
   prompt_leak_markers_json TEXT,
   structured_payload_json TEXT,
@@ -192,6 +195,9 @@ CREATE TABLE IF NOT EXISTS mr_qodo_artifacts (
   qodo_labels_json TEXT,
   parser_version TEXT,
   quality_status TEXT,
+  reviewer_summary TEXT,
+  reviewer_summary_status TEXT NOT NULL DEFAULT 'missing',
+  context_quality_score REAL NOT NULL DEFAULT 0.0,
   prompt_leak_count INTEGER NOT NULL DEFAULT 0,
   prompt_leak_markers_json TEXT,
   structured_payload_json TEXT,
@@ -320,12 +326,25 @@ class Database:
             conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN parser_version TEXT")
         if "quality_status" not in qodo_columns:
             conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN quality_status TEXT")
+        if "reviewer_summary" not in qodo_columns:
+            conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN reviewer_summary TEXT")
+        if "reviewer_summary_status" not in qodo_columns:
+            conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN reviewer_summary_status TEXT NOT NULL DEFAULT 'missing'")
+        if "context_quality_score" not in qodo_columns:
+            conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN context_quality_score REAL NOT NULL DEFAULT 0.0")
         if "prompt_leak_count" not in qodo_columns:
             conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN prompt_leak_count INTEGER NOT NULL DEFAULT 0")
         if "prompt_leak_markers_json" not in qodo_columns:
             conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN prompt_leak_markers_json TEXT")
         if "structured_payload_json" not in qodo_columns:
             conn.execute("ALTER TABLE mr_qodo_describe ADD COLUMN structured_payload_json TEXT")
+        qodo_artifact_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_qodo_artifacts)").fetchall()}
+        if qodo_artifact_columns and "reviewer_summary" not in qodo_artifact_columns:
+            conn.execute("ALTER TABLE mr_qodo_artifacts ADD COLUMN reviewer_summary TEXT")
+        if qodo_artifact_columns and "reviewer_summary_status" not in qodo_artifact_columns:
+            conn.execute("ALTER TABLE mr_qodo_artifacts ADD COLUMN reviewer_summary_status TEXT NOT NULL DEFAULT 'missing'")
+        if qodo_artifact_columns and "context_quality_score" not in qodo_artifact_columns:
+            conn.execute("ALTER TABLE mr_qodo_artifacts ADD COLUMN context_quality_score REAL NOT NULL DEFAULT 0.0")
         qodo_run_columns = {r["name"] for r in conn.execute("PRAGMA table_info(mr_qodo_runs)").fetchall()}
         if "tool" not in qodo_run_columns:
             conn.execute("ALTER TABLE mr_qodo_runs ADD COLUMN tool TEXT NOT NULL DEFAULT 'describe'")
@@ -353,13 +372,15 @@ class Database:
             INSERT OR IGNORE INTO mr_qodo_artifacts (
               mr_id, project_id, mr_iid, tool, markdown_path, raw_output_path, content_sha256,
               qodo_title, qodo_type, qodo_summary, qodo_sections_json, qodo_labels_json,
-              parser_version, quality_status, prompt_leak_count, prompt_leak_markers_json,
+              parser_version, quality_status, reviewer_summary, reviewer_summary_status, context_quality_score,
+              prompt_leak_count, prompt_leak_markers_json,
               structured_payload_json, updated_at
             )
             SELECT
               mr_id, project_id, mr_iid, 'describe', markdown_path, raw_output_path, content_sha256,
               qodo_title, qodo_type, qodo_summary, qodo_sections_json, qodo_labels_json,
-              parser_version, quality_status, prompt_leak_count, prompt_leak_markers_json,
+              parser_version, quality_status, reviewer_summary, reviewer_summary_status, context_quality_score,
+              prompt_leak_count, prompt_leak_markers_json,
               structured_payload_json, updated_at
             FROM mr_qodo_describe
             """
@@ -681,8 +702,9 @@ class Database:
             INSERT INTO mr_qodo_describe (
               mr_id, project_id, mr_iid, markdown_path, content_sha256, qodo_title, qodo_type,
               qodo_summary, qodo_sections_json, qodo_labels_json, raw_output_path, parser_version,
-              quality_status, prompt_leak_count, prompt_leak_markers_json, structured_payload_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              quality_status, reviewer_summary, reviewer_summary_status, context_quality_score,
+              prompt_leak_count, prompt_leak_markers_json, structured_payload_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(mr_id) DO UPDATE SET
               project_id=excluded.project_id,
               mr_iid=excluded.mr_iid,
@@ -696,6 +718,9 @@ class Database:
               raw_output_path=excluded.raw_output_path,
               parser_version=excluded.parser_version,
               quality_status=excluded.quality_status,
+              reviewer_summary=excluded.reviewer_summary,
+              reviewer_summary_status=excluded.reviewer_summary_status,
+              context_quality_score=excluded.context_quality_score,
               prompt_leak_count=excluded.prompt_leak_count,
               prompt_leak_markers_json=excluded.prompt_leak_markers_json,
               structured_payload_json=excluded.structured_payload_json,
@@ -715,6 +740,9 @@ class Database:
                 row.get("raw_output_path"),
                 row.get("parser_version"),
                 row.get("quality_status"),
+                row.get("reviewer_summary"),
+                row.get("reviewer_summary_status", "missing"),
+                float(row.get("context_quality_score", 0.0)),
                 int(row.get("prompt_leak_count", 0)),
                 json.dumps(row.get("prompt_leak_markers", [])),
                 json.dumps(row.get("structured_payload", {})),
@@ -748,9 +776,10 @@ class Database:
             INSERT INTO mr_qodo_artifacts (
               mr_id, project_id, mr_iid, tool, markdown_path, raw_output_path, content_sha256,
               qodo_title, qodo_type, qodo_summary, qodo_sections_json, qodo_labels_json,
-              parser_version, quality_status, prompt_leak_count, prompt_leak_markers_json,
+              parser_version, quality_status, reviewer_summary, reviewer_summary_status, context_quality_score,
+              prompt_leak_count, prompt_leak_markers_json,
               structured_payload_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(mr_id, tool) DO UPDATE SET
               project_id=excluded.project_id,
               mr_iid=excluded.mr_iid,
@@ -764,6 +793,9 @@ class Database:
               qodo_labels_json=excluded.qodo_labels_json,
               parser_version=excluded.parser_version,
               quality_status=excluded.quality_status,
+              reviewer_summary=excluded.reviewer_summary,
+              reviewer_summary_status=excluded.reviewer_summary_status,
+              context_quality_score=excluded.context_quality_score,
               prompt_leak_count=excluded.prompt_leak_count,
               prompt_leak_markers_json=excluded.prompt_leak_markers_json,
               structured_payload_json=excluded.structured_payload_json,
@@ -784,6 +816,9 @@ class Database:
                 json.dumps(row.get("qodo_labels", [])),
                 row.get("parser_version"),
                 row.get("quality_status"),
+                row.get("reviewer_summary"),
+                row.get("reviewer_summary_status", "missing"),
+                float(row.get("context_quality_score", 0.0)),
                 int(row.get("prompt_leak_count", 0)),
                 json.dumps(row.get("prompt_leak_markers", [])),
                 json.dumps(row.get("structured_payload", {})),

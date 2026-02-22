@@ -282,7 +282,7 @@ def classify_project(
             if not str(mr.get("description") or "").strip():
                 qodo = conn.execute(
                     """
-                    SELECT qodo_summary
+                    SELECT reviewer_summary, reviewer_summary_status, qodo_summary
                     FROM mr_qodo_artifacts
                     WHERE mr_id = ? AND tool = 'describe'
                     """,
@@ -291,14 +291,20 @@ def classify_project(
                 if qodo is None:
                     qodo = conn.execute(
                         """
-                        SELECT qodo_summary
+                        SELECT reviewer_summary, reviewer_summary_status, qodo_summary
                         FROM mr_qodo_describe
                         WHERE mr_id = ?
                         """,
                         (mr_id,),
                     ).fetchone()
-                if qodo and str(qodo["qodo_summary"] or "").strip():
-                    mr["description"] = str(qodo["qodo_summary"]).strip()
+                if qodo:
+                    reviewer_summary = str(qodo["reviewer_summary"] or "").strip()
+                    reviewer_summary_status = str(qodo["reviewer_summary_status"] or "").strip().lower()
+                    qodo_summary = str(qodo["qodo_summary"] or "").strip()
+                    if reviewer_summary and reviewer_summary_status in {"clean", "ok"}:
+                        mr["description"] = reviewer_summary
+                    elif qodo_summary:
+                        mr["description"] = qodo_summary
 
             discussion_map = {
                 "thread_count": int(discussion["thread_count"]) if discussion else 0,
