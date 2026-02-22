@@ -98,6 +98,74 @@ def _sanitize_content(content: str) -> str:
     return "\n".join(out_lines).strip()
 
 
+def _looks_like_diff_text(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    prefixes = ("@@ ", "diff --git", "+++ ", "--- ", "+", "-")
+    lines = [ln.strip() for ln in t.splitlines()[:8] if ln.strip()]
+    if not lines:
+        return False
+    hits = 0
+    for ln in lines:
+        if any(ln.startswith(p) for p in prefixes):
+            hits += 1
+    return hits >= max(2, len(lines) // 2)
+
+
+def _select_reviewer_summary(
+    parsed: dict[str, Any],
+    quality_status: str,
+    prompt_leak_markers: list[str],
+) -> tuple[str | None, str]:
+    if quality_status == "failed":
+        return None, "failed"
+    if prompt_leak_markers:
+        return None, "unsafe"
+
+    sections = parsed.get("sections") if isinstance(parsed.get("sections"), dict) else {}
+    candidates: list[str] = []
+    for candidate in (
+        parsed.get("summary"),
+        sections.get("summary"),
+        sections.get("overview"),
+        sections.get("changes"),
+    ):
+        if isinstance(candidate, str):
+            candidates.append(candidate)
+
+    for text in candidates:
+        cleaned = _sanitize_content(text)
+        if not cleaned:
+            continue
+        if _looks_like_diff_text(cleaned):
+            continue
+        if len(cleaned.split()) < 8:
+            continue
+        return cleaned[:1000], "clean"
+    return None, "missing"
+
+
+def _context_quality_score(
+    quality_status: str,
+    reviewer_summary_status: str,
+    prompt_leak_count: int,
+    missing_required_count: int,
+) -> float:
+    score = 0.6
+    if quality_status == "ok":
+        score += 0.2
+    elif quality_status == "failed":
+        score -= 0.4
+    if reviewer_summary_status == "clean":
+        score += 0.2
+    elif reviewer_summary_status == "unsafe":
+        score -= 0.25
+    score -= min(0.25, 0.08 * max(0, int(prompt_leak_count)))
+    score -= min(0.2, 0.05 * max(0, int(missing_required_count)))
+    return max(0.0, min(1.0, round(score, 3)))
+
+
 def _collect_secret_values() -> list[str]:
     secrets: list[str] = []
     for key, value in os.environ.items():
@@ -602,6 +670,14 @@ def _run_qodo_for_mr(
             parsed["summary"] = snippet_text[:1200]
             parsed["sections"] = {"summary": parsed["summary"]}
 
+    reviewer_summary, reviewer_summary_status = _select_reviewer_summary(parsed, quality_status, prompt_leak_markers)
+    context_quality_score = _context_quality_score(
+        quality_status=quality_status,
+        reviewer_summary_status=reviewer_summary_status,
+        prompt_leak_count=len(prompt_leak_markers),
+        missing_required_count=len(missing_required),
+    )
+
     markdown = (
         _render_clean_markdown(parsed, default_title=f"Qodo {tool.title()}")
         if quality_status != "failed"
@@ -636,6 +712,9 @@ def _run_qodo_for_mr(
         "qodo_labels": parsed.get("labels", []),
         "parser_version": PARSER_VERSION,
         "quality_status": quality_status,
+        "reviewer_summary": reviewer_summary,
+        "reviewer_summary_status": reviewer_summary_status,
+        "context_quality_score": context_quality_score,
         "prompt_leak_count": len(prompt_leak_markers),
         "prompt_leak_markers": prompt_leak_markers,
         "structured_payload": parsed,
@@ -1078,6 +1157,9 @@ def enrich_qodo_project(
                         "raw_output_path": res.get("raw_output_path"),
                         "parser_version": res.get("parser_version"),
                         "quality_status": res.get("quality_status"),
+                        "reviewer_summary": res.get("reviewer_summary"),
+                        "reviewer_summary_status": res.get("reviewer_summary_status", "missing"),
+                        "context_quality_score": float(res.get("context_quality_score", 0.0)),
                         "prompt_leak_count": res.get("prompt_leak_count", 0),
                         "prompt_leak_markers": res.get("prompt_leak_markers", []),
                         "structured_payload": res.get("structured_payload", {}),
@@ -1102,6 +1184,9 @@ def enrich_qodo_project(
                         "raw_output_path": res.get("raw_output_path"),
                         "parser_version": res.get("parser_version"),
                         "quality_status": res.get("quality_status"),
+                        "reviewer_summary": res.get("reviewer_summary"),
+                        "reviewer_summary_status": res.get("reviewer_summary_status", "missing"),
+                        "context_quality_score": float(res.get("context_quality_score", 0.0)),
                         "prompt_leak_count": res.get("prompt_leak_count", 0),
                         "prompt_leak_markers": res.get("prompt_leak_markers", []),
                         "structured_payload": res.get("structured_payload", {}),

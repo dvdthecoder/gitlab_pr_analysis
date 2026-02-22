@@ -10,12 +10,52 @@ Requires-Dist: python-gitlab>=4.5.0
 
 Python CLI for GitLab Merge Request analysis with SQLite storage, infra-aware type classification, and complexity scoring.
 
+## Single MR Context (New)
+
+Use this command when you want one rich markdown context for a specific MR (for handoff/review/history).
+
+Execution order in one command:
+1. Optional Qodo run for the MR (`describe` by default, configurable)
+2. Optional targeted reclassification for the same MR
+3. Render rich context markdown from SQLite + Qodo artifacts
+
+Examples:
+
+```bash
+prtool mr-context --project-id 123 --mr-iid 456
+prtool mr-context --mr-url https://gitlab.example/org/repo/-/merge_requests/456 --qodo-tools describe,review
+prtool mr-context --project-id 123 --mr-iid 456 --no-qodo-inline --no-reclassify
+```
+
+Default output path:
+
+```text
+outputs/mr_context/mr_context_<project_id>_<mr_iid>.md
+```
+
+Key options:
+- `--project-id` + `--mr-iid` or `--mr-url` (pick one method)
+- `--qodo-inline/--no-qodo-inline` (default: on)
+- `--reclassify/--no-reclassify` (default: on)
+- `--qodo-tools describe,review,improve`
+- `--out-path` to override output location
+
 ## Quick start
 
 ```bash
+# prtool runtime
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+
+# qodo/pr-agent runtime (kept separate to avoid dependency conflicts)
+python3 -m venv .venv-qodo
+source .venv-qodo/bin/activate
+pip install -r requirements-enrich.txt
+deactivate
+
+# initialize DB with prtool runtime
+source .venv/bin/activate
 prtool init-db
 ```
 
@@ -32,7 +72,7 @@ Set environment variables (this is where PAT goes):
 - `GITLAB_PROJECT_ID` (single project) or `GITLAB_PROJECT_IDS` (comma-separated multiple projects)
 - `GITLAB_GROUP_ID` / `GITLAB_GROUP_IDS` (optional: restrict discovery to specific group(s))
 - `DB_PATH` (default `./pr_analysis.db`)
-- `QODO_DESCRIBE_CMD` (required for `enrich qodo`, must include `{mr_url}`; use `--config.publish_output=false` for read-only mode)
+- `QODO_DESCRIBE_CMD` (required for `enrich qodo`/inline qodo; must include `{mr_url}`; use `--config.publish_output=false` for read-only mode)
 - `QODO_REVIEW_CMD` / `QODO_IMPROVE_CMD` (optional overrides for multi-tool runs)
 
 Example:
@@ -42,10 +82,10 @@ export GITLAB_BASE_URL="https://gitlab.com"
 export GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxx"
 export GITLAB_PROJECT_IDS="12345678,23456789,34567890"
 export GITLAB_GROUP_ID="your-org/your-group"
-export QODO_DESCRIBE_CMD="python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
+export QODO_DESCRIBE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
 # Optional overrides:
-# export QODO_REVIEW_CMD="python -m pr_agent.cli --pr_url={mr_url} review --config.publish_output=false --config.verbosity_level=2"
-# export QODO_IMPROVE_CMD="python -m pr_agent.cli --pr_url={mr_url} improve --config.publish_output=false --config.verbosity_level=2"
+# export QODO_REVIEW_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} review --config.publish_output=false --config.verbosity_level=2"
+# export QODO_IMPROVE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} improve --config.publish_output=false --config.verbosity_level=2"
 export DB_PATH="./pr_analysis.db"
 ```
 
@@ -57,6 +97,91 @@ Optional infra config:
 - `INFRA_STRONG_THRESHOLD` (default `4.0`)
 - `INFRA_WEAK_THRESHOLD` (default `1.5`)
 - `CLASSIFICATION_NEEDS_REVIEW_THRESHOLD` (default `0.75`, below this confidence => `needs_review=true`)
+- `QODO_INLINE_ENABLED` (default `false`; run threshold-Qodo inline during `reclassify`)
+- `QODO_TRIGGER_MIN_CONF` / `QODO_TRIGGER_MAX_CONF` (defaults `0.70` / `0.75`)
+- `QODO_TRIGGER_REASONS` (default `missing_description,low_top2_margin`)
+- `QODO_REQUIRE_EMPTY_DESCRIPTION` (default `false`)
+- `QODO_INLINE_CONCURRENCY` (default `5`)
+- `QODO_INLINE_TIMEOUT_SEC` (default `180`)
+
+## Recommended runtime sequence
+
+```bash
+# load .env once per shell
+set -a
+source .env
+set +a
+
+# run prtool using .venv
+source .venv/bin/activate
+
+# classifier-only flow
+prtool reclassify --all-projects --force
+
+# classifier + inline qodo flow
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+If you hit qodo timeouts, increase timeout and reduce concurrency:
+
+```bash
+export QODO_INLINE_TIMEOUT_SEC=420
+export QODO_INLINE_CONCURRENCY=3
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+## Troubleshooting
+
+### Qodo fails with `ModuleNotFoundError: No module named 'pr_agent'`
+
+Symptom in `mr_qodo_runs.stderr_excerpt`:
+
+```text
+Error while finding module specification for 'pr_agent.cli'
+```
+
+Fix:
+
+```bash
+# ensure qodo runtime exists and has dependencies
+python3 -m venv .venv-qodo
+source .venv-qodo/bin/activate
+pip install -r requirements-enrich.txt
+deactivate
+
+# ensure .env uses qodo runtime interpreter
+export QODO_DESCRIBE_CMD=".venv-qodo/bin/python -m pr_agent.cli --pr_url={mr_url} describe --config.publish_output=false --pr_description.publish_labels=false --config.verbosity_level=2"
+```
+
+Also clear stale shell vars before reloading `.env`:
+
+```bash
+unset QODO_DESCRIBE_CMD QODO_REVIEW_CMD QODO_IMPROVE_CMD
+set -a; source .env; set +a
+```
+
+### Qodo fails with timeout (`timeout after 180s`)
+
+Symptom in `mr_qodo_runs.stderr_excerpt`:
+
+```text
+timeout after 180s
+```
+
+Fix by increasing timeout and lowering concurrency:
+
+```bash
+export QODO_INLINE_TIMEOUT_SEC=420
+export QODO_INLINE_CONCURRENCY=3
+prtool reclassify --all-projects --force --qodo-inline
+```
+
+### Validate current qodo health quickly
+
+```bash
+sqlite3 pr_analysis.db "SELECT tool, status, COUNT(*) FROM mr_qodo_runs GROUP BY tool, status ORDER BY tool, status;"
+sqlite3 pr_analysis.db "SELECT COUNT(*) FROM mr_qodo_artifacts WHERE tool='describe';"
+```
 
 Commands:
 
@@ -82,6 +207,10 @@ prtool classify --all-projects --project-start-index 2 --project-count 5
 prtool reclassify --all-projects
 prtool reclassify --all-projects --only-stale
 prtool reclassify --all-projects --force
+prtool reclassify --all-projects --force --qodo-inline --qodo-min-confidence 0.70 --qodo-max-confidence 0.75
+prtool mr-context --project-id 123 --mr-iid 456
+prtool mr-context --mr-url https://gitlab.example/org/repo/-/merge_requests/456 --qodo-tools describe,review
+prtool mr-context --project-id 123 --mr-iid 456 --no-qodo-inline --no-reclassify
 prtool batch run --all-projects
 prtool batch run --group-id your-org/your-group
 prtool batch run --group-id your-org/your-group --concurrency 5 --light-mode
@@ -132,6 +261,8 @@ If `--group-id` (or `GITLAB_GROUP_ID(S)`) is provided, project discovery is scop
 `enrich qodo` supports a stratified candidate selector (`--candidate-mode stratified`) to pick top-complexity MRs with soft type diversification before running tools.
 `enrich qodo-threshold` selects `needs_review=1` MRs in a configurable confidence band (default `0.70..0.75`), runs Qodo, then automatically reclassifies the same MR IDs.
 `enrich qodo-threshold` filters can be tuned with `--reasons`, `--require-empty-description`, and env vars (`QODO_TRIGGER_MIN_CONF`, `QODO_TRIGGER_MAX_CONF`, `QODO_TRIGGER_REASONS`).
+`reclassify` can run threshold-based Qodo inline via `--qodo-inline` (or env `QODO_INLINE_ENABLED=true`) before classification.
+`mr-context` generates one rich MR markdown context file from DB signals (classification/features/files/commits/memory) and optional inline Qodo run.
 `--concurrency` controls MR detail fetch workers (default 5).
 `--light-mode` fetches metadata/commits/files only (skips discussions/approvals/pipelines for faster sync).
 Viewer defaults to `production` data-source rows, supports complexity-level filter, and sorts by complexity high-to-low by default.
