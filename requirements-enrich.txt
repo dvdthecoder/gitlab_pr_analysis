@@ -4,6 +4,6 @@
 #
 # Keep these aligned with pr-agent 0.2.4 pins.
 pr-agent==0.2.4
-litellm==1.43.13
+litellm==1.61.15
 openai==1.40.6
 httpx==0.27.2
