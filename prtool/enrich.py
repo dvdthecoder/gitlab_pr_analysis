@@ -182,7 +182,7 @@ def _redact_secrets(text: str) -> str:
     redacted = text
     patterns = [
         re.compile(r"(glpat-)[A-Za-z0-9._-]+"),
-        re.compile(r"(sk-[A-Za-z0-9][A-Za-z0-9_-]{8,})"),
+        re.compile(r"(sk-)[A-Za-z0-9][A-Za-z0-9_-]{8,}"),
         re.compile(r"(--gitlab\.personal_access_token=)(\S+)"),
         re.compile(r"(GITLAB\.PERSONAL_ACCESS_TOKEN to:\s*\")([^\"]+)(\")"),
         re.compile(r"(OPENAI_API_KEY\s*=\s*)(\S+)"),

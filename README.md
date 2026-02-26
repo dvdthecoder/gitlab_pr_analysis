@@ -52,6 +52,8 @@ source .venv/bin/activate
 prtool init-db
 ```
 
+`PyYAML` is included in base `prtool` dependencies, so YAML payload parsing in `enrich` works in CI and local installs without extra steps.
+
 You can use a `.env` file (auto-loaded by `prtool`). Start from `.env.example`:
 
 ```bash
@@ -175,6 +177,9 @@ prtool reclassify --all-projects --force --qodo-inline
 sqlite3 pr_analysis.db "SELECT tool, status, COUNT(*) FROM mr_qodo_runs GROUP BY tool, status ORDER BY tool, status;"
 sqlite3 pr_analysis.db "SELECT COUNT(*) FROM mr_qodo_artifacts WHERE tool='describe';"
 ```
+
+For leaked/disabled API key response steps, see:
+`docs/security_incident_response.md`
 
 Commands:
 

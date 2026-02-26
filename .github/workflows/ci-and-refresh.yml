@@ -22,9 +22,20 @@ jobs:
       - name: Run tests
         run: pytest
 
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   refresh:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    needs: test
+    needs: [test, secret-scan]
     runs-on: ubuntu-latest
     env:
       GITLAB_BASE_URL: ${{ secrets.GITLAB_BASE_URL }}

@@ -376,6 +376,19 @@ def test_redact_secrets_masks_pat_and_settings_line(monkeypatch) -> None:
     assert "[REDACTED]" in out
 
 
+def test_redact_secrets_masks_openai_style_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-super-secret-key")
+    raw = (
+        "OPENAI_API_KEY=sk-live-super-secret-key\n"
+        "Authorization: Bearer sk-live-super-secret-key\n"
+        "payload key sk-proj-abcdef1234567890zzzz\n"
+    )
+    out = _redact_secrets(raw)
+    assert "sk-live-super-secret-key" not in out
+    assert "sk-proj-abcdef1234567890zzzz" not in out
+    assert out.count("[REDACTED]") >= 2
+
+
 def test_enrich_raw_log_is_redacted(monkeypatch, tmp_path) -> None:
     db = Database(str(tmp_path / "redact.db"))
     db.init_schema()
@@ -392,4 +405,23 @@ def test_enrich_raw_log_is_redacted(monkeypatch, tmp_path) -> None:
     raw_path = Path(opts.output_root) / "808" / "1" / "describe.raw.log"
     content = raw_path.read_text(encoding="utf-8")
     assert "glpat-super-secret" not in content
+    assert "[REDACTED]" in content
+
+
+def test_enrich_raw_log_redacts_openai_key(monkeypatch, tmp_path) -> None:
+    db = Database(str(tmp_path / "redact_openai.db"))
+    db.init_schema()
+    with db.connect() as conn:
+        db.upsert_merge_request(conn, _mr(809, 1, 809001))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-sensitive-openai-key")
+    monkeypatch.setenv(
+        "QODO_DESCRIBE_CMD",
+        "printf 'OPENAI_API_KEY=sk-sensitive-openai-key\\nfor {mr_url}\\n# T\\n\\n## Summary\\nOk\\n'",
+    )
+    opts = EnrichOptions(output_root=str(tmp_path / "out"), concurrency=1, data_source="production")
+    res = enrich_qodo_project(db, 809, opts)
+    assert res["success"] == 1
+    raw_path = Path(opts.output_root) / "809" / "1" / "describe.raw.log"
+    content = raw_path.read_text(encoding="utf-8")
+    assert "sk-sensitive-openai-key" not in content
     assert "[REDACTED]" in content
